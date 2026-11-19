@@ -12,7 +12,8 @@
 //! * `stitchcraft-export` compiles a canvas into a mod source tree.
 //!
 //! This binary is the shell around them: it starts Qt, registers both QML
-//! modules, and hands the canvas a [`bridge::qobject::Backend`].
+//! modules, and hands the canvas a [`bridge::qobject::Backend`]. Editing
+//! itself lives in `stitchcraft_blocks::editing`, where it is tested without Qt.
 
 // A release build on Windows is a GUI program: launched from a shortcut it must not
 // bring a console window up behind the editor. Debug builds keep the console, so a
@@ -20,8 +21,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod bridge;
-mod edit;
-mod wire;
+mod fonts;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
@@ -38,6 +38,7 @@ fn main() {
             .set_organization_name(&QString::from("Blockworked"));
         app.pin_mut()
             .set_application_version(&QString::from(env!("CARGO_PKG_VERSION")));
+        fonts::use_bundled_font();
     }
 
     // Both QML modules are statically linked into this binary, so their

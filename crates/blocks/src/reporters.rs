@@ -266,6 +266,14 @@ pub fn palette_entries_json() -> serde_json::Value {
     entries_json(REPORTERS.iter())
 }
 
+/// Stitchcraft's reporters as blockstitch-core describes them - the fresh
+/// value each one drops - for `BlockRegistry.registerDescriptors`. Registers
+/// them first, so the answer never depends on startup order.
+pub fn descriptors_json() -> serde_json::Value {
+    register();
+    json!(blockstitch_core::value::host_operator_descriptors())
+}
+
 /// The list reporters, in the same shape, for the palette's list section.
 pub fn list_palette_entries_json() -> serde_json::Value {
     entries_json(
@@ -366,6 +374,19 @@ mod tests {
                 spec.kind
             );
         }
+    }
+
+    #[test]
+    fn descriptors_give_each_reporter_its_defaults() {
+        let descriptors = descriptors_json();
+        let block_at = descriptors
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["kind"] == "IsBlockAt")
+            .expect("described");
+        assert_eq!(block_at["arity"], 4);
+        assert_eq!(block_at["args"][3]["default"]["value"], "minecraft:stone");
     }
 
     #[test]

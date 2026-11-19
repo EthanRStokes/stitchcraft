@@ -83,7 +83,7 @@ END
 fn main() {
     embed_windows_resources();
 
-    CxxQtBuilder::new_qml_module(
+    let builder = CxxQtBuilder::new_qml_module(
         QmlModule::new("com.blockworked.Stitchcraft")
             .version(1, 0)
             .depend("com.blockworked.Blockstitch")
@@ -91,17 +91,27 @@ fn main() {
                 // Order does not matter to the module, but it reads as the
                 // dependency order: theme, then rows, then the shell.
                 "qml/Stitchcraft/BlockRows.qml",
-                "qml/Stitchcraft/Palette.qml",
-                "qml/Stitchcraft/DeleteZone.qml",
-                "qml/Stitchcraft/SlimScrollBar.qml",
+                "qml/Stitchcraft/IconButton.qml",
                 "qml/Stitchcraft/DiagnosticsBar.qml",
                 "qml/Stitchcraft/ModSettingsDialog.qml",
+                "qml/Stitchcraft/MakeBlockDialog.qml",
                 "qml/Stitchcraft/Main.qml",
             ]),
     )
     .qrc("qml/controls.qrc")
     .file("src/bridge.rs")
+    .file("src/fonts.rs")
     .qt_module("Quick")
-    .qt_module("QuickControls2")
-    .build();
+    .qt_module("QuickControls2");
+    println!("cargo:rerun-if-changed=src/fonts.cpp");
+    println!("cargo:rerun-if-changed=src/fonts.h");
+    // SAFETY: only adds this crate's own C++ file and include directory.
+    unsafe {
+        builder
+            .cc_builder(|cc| {
+                cc.include("src");
+                cc.file("src/fonts.cpp");
+            })
+            .build();
+    }
 }

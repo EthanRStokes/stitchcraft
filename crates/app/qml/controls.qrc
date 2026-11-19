@@ -1,7 +1,18 @@
 <!-- Qt looks for the Controls configuration at the root of the resource system,
-     so this one file is mounted at ":/" rather than under the QML module. -->
+     so this file is mounted at ":/" rather than under the QML module. The fonts
+     sit beside it at ":/fonts". -->
 <RCC>
   <qresource prefix="/">
     <file>qtquickcontrols2.conf</file>
+  </qresource>
+  <qresource prefix="/fonts">
+    <file alias="AtkinsonHyperlegibleNext-Regular.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Regular.ttf</file>
+    <file alias="AtkinsonHyperlegibleNext-Medium.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Medium.ttf</file>
+    <file alias="AtkinsonHyperlegibleNext-SemiBold.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf</file>
+    <file alias="AtkinsonHyperlegibleNext-Bold.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Bold.ttf</file>
+    <file alias="AtkinsonHyperlegibleNext-Italic.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Italic.ttf</file>
+  </qresource>
+  <qresource prefix="/icons">
+    <file alias="stitchcraft.png">../../../res/icons/stitchcraft.png</file>
   </qresource>
 </RCC>

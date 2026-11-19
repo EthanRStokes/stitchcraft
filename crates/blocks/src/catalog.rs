@@ -34,6 +34,8 @@ pub enum Shape {
 pub enum Options {
     /// A fixed `[(value, label)]` table.
     Fixed(&'static [(&'static str, &'static str)]),
+    /// The document's variable names.
+    Variables,
     /// The document's list names.
     Lists,
     /// The document's dict names.
@@ -93,12 +95,45 @@ pub struct Row {
     pub separators: &'static [&'static str],
 }
 
-/// A palette section: a heading and the types under it, in the order the
-/// sidebar shows them.
+/// A palette section: the category it files under, a heading, and the
+/// blocks and reporters under it, in the order the sidebar shows them.
+/// `items` names instruction types and reporter kinds alike.
 pub struct Section {
+    pub category: &'static str,
     pub title: &'static str,
-    pub types: &'static [&'static str],
+    pub items: &'static [&'static str],
 }
+
+/// A sidebar category of Stitchcraft's own, beside blockstitch's Events,
+/// Flow, Data and Operators. `after` names the category it follows.
+pub struct Category {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub icon: &'static str,
+    pub after: &'static str,
+}
+
+/// The categories Stitchcraft adds: what a mod declares, and what it does to
+/// the world.
+pub const PALETTE_CATEGORIES: &[Category] = &[
+    Category {
+        id: "registry",
+        name: "Registry",
+        icon: "package",
+        after: "all",
+    },
+    Category {
+        id: "world",
+        name: "World",
+        icon: "globe",
+        after: "events",
+    },
+];
+
+/// Types blockstitch draws itself (control blocks, custom block headers and
+/// calls). They keep a prefab, but get no row: a host row would replace
+/// blockstitch's own drawing of them.
+pub const SELF_DRAWN: &[&str] = &["If", "IfElse", "Repeat", "While", "BlockHeader", "CallBlock"];
 
 // ── Fixed dropdown tables ─────────────────────────────────────────────────
 // The `value` in each pair is the serde name of the matching variant in
@@ -592,7 +627,7 @@ pub const ROWS: &[Row] = &[
         "equal",
         &[
             label("set"),
-            choose("name", Options::Source("variables"), "variable"),
+            choose("name", Options::Variables, "variable"),
             label("to"),
             slot("value"),
         ],
@@ -602,7 +637,7 @@ pub const ROWS: &[Row] = &[
         "trending-up",
         &[
             label("change"),
-            choose("name", Options::Source("variables"), "variable"),
+            choose("name", Options::Variables, "variable"),
             label("by"),
             slot("value"),
         ],
@@ -738,18 +773,19 @@ pub const ROWS: &[Row] = &[
 /// The palette, top to bottom.
 pub const SECTIONS: &[Section] = &[
     Section {
-        title: "Registry",
-        types: &[
-            "RegisterBlock",
-            "RegisterItem",
-            "RegisterEntity",
-            "RegisterSound",
-            "RegisterCreativeTab",
-        ],
+        category: "registry",
+        title: "Content",
+        items: &["RegisterBlock", "RegisterItem", "RegisterEntity"],
     },
     Section {
-        title: "Lifecycle",
-        types: &[
+        category: "registry",
+        title: "Sounds and tabs",
+        items: &["RegisterSound", "RegisterCreativeTab"],
+    },
+    Section {
+        category: "events",
+        title: "The mod",
+        items: &[
             "OnModInit",
             "OnClientInit",
             "OnServerStarted",
@@ -760,8 +796,9 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
-        title: "World events",
-        types: &[
+        category: "events",
+        title: "Blocks and items",
+        items: &[
             "OnBlockPlaced",
             "OnBlockBroken",
             "OnBlockUsed",
@@ -770,8 +807,9 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
-        title: "Entity events",
-        types: &[
+        category: "events",
+        title: "Players and mobs",
+        items: &[
             "OnPlayerJoin",
             "OnPlayerLeave",
             "OnEntityTick",
@@ -780,36 +818,86 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
-        title: "Talk",
-        types: &["Message", "Broadcast", "LogInfo", "RunCommand"],
-    },
-    Section {
-        title: "World",
-        types: &[
-            "SetBlockAt",
-            "BreakBlockAt",
-            "SpawnEntityAt",
-            "PlaySoundAt",
-            "SpawnParticleAt",
-            "ExplodeAt",
-            "SetTimeOfDay",
-            "SetWeather",
+        category: "events",
+        title: "What happened",
+        items: &[
+            "EventPlayerName",
+            "EventPlayerHealth",
+            "EventPlayerHeldItem",
+            "EventX",
+            "EventY",
+            "EventZ",
+            "EventBlockId",
+            "EventEntityType",
+            "EventEntityHealth",
+            "EventDamageAmount",
+            "CancelEvent",
         ],
     },
     Section {
-        title: "Entities",
-        types: &[
+        category: "world",
+        title: "Messages",
+        items: &["Message", "Broadcast", "LogInfo", "RunCommand"],
+    },
+    Section {
+        category: "world",
+        title: "Blocks",
+        items: &[
+            "SetBlockAt",
+            "BreakBlockAt",
+            "BlockIdAt",
+            "IsBlockAt",
+            "LightAt",
+            "SurfaceHeightAt",
+        ],
+    },
+    Section {
+        category: "world",
+        title: "Players and mobs",
+        items: &[
             "GiveItem",
             "DamageTarget",
             "HealTarget",
             "AddEffect",
             "TeleportTarget",
             "PushTarget",
+            "SpawnEntityAt",
         ],
     },
     Section {
-        title: "Control",
-        types: &[
+        category: "world",
+        title: "Effects",
+        items: &["PlaySoundAt", "SpawnParticleAt", "ExplodeAt"],
+    },
+    Section {
+        category: "world",
+        title: "Time and weather",
+        items: &[
+            "SetTimeOfDay",
+            "SetWeather",
+            "IsDay",
+            "IsRaining",
+            "TimeOfDay",
+            "TicksToSeconds",
+        ],
+    },
+    Section {
+        category: "world",
+        title: "Server",
+        items: &[
+            "PlayerCount",
+            "ServerTickCount",
+            "Difficulty",
+            "LevelName",
+            "ModVersion",
+            "IsFabric",
+            "IsNeoForge",
+        ],
+    },
+    Section {
+        category: "control",
+        title: "",
+        items: &[
             "If",
             "IfElse",
             "Repeat",
@@ -819,8 +907,12 @@ pub const SECTIONS: &[Section] = &[
             "EscapeLoop",
             "ContinueLoop",
             "Return",
-            "CancelEvent",
         ],
+    },
+    Section {
+        category: "operators",
+        title: "Chance",
+        items: &["RandomChance"],
     },
 ];
 
@@ -1126,6 +1218,7 @@ fn piece_json(piece: &Piece) -> serde_json::Value {
                         .map(|(value, label)| json!({ "value": value, "label": label }))
                         .collect::<Vec<_>>()
                 ),
+                Options::Variables => json!("variables"),
                 Options::Lists => json!("lists"),
                 Options::Dicts => json!("dicts"),
                 Options::Source(name) => json!({ "source": name }),
@@ -1149,7 +1242,7 @@ fn piece_json(piece: &Piece) -> serde_json::Value {
 /// with functions.
 pub fn rows_json() -> serde_json::Value {
     let mut rows = Map::new();
-    for row in ROWS {
+    for row in ROWS.iter().filter(|row| !SELF_DRAWN.contains(&row.kind)) {
         let mut entry = Map::new();
         entry.insert("icon".to_string(), json!(row.icon));
         match row.shape {
@@ -1202,7 +1295,21 @@ pub fn sections_json() -> serde_json::Value {
     json!(
         SECTIONS
             .iter()
-            .map(|section| json!({ "title": section.title, "types": section.types }))
+            .map(|section| json!({
+                "category": section.category,
+                "title": section.title,
+                "items": section.items,
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// [`PALETTE_CATEGORIES`] as `PalettePanel.appCategories` wants them.
+pub fn categories_json() -> serde_json::Value {
+    json!(
+        PALETTE_CATEGORIES
+            .iter()
+            .map(|c| json!({ "id": c.id, "name": c.name, "icon": c.icon, "after": c.after }))
             .collect::<Vec<_>>()
     )
 }
@@ -1346,9 +1453,9 @@ mod check {
     fn sections_only_name_types_that_exist() {
         let kinds: HashSet<&str> = ROWS.iter().map(|row| row.kind).collect();
         for section in SECTIONS {
-            for kind in section.types {
+            for kind in section.items {
                 assert!(
-                    kinds.contains(kind),
+                    kinds.contains(kind) || crate::reporters::reporter(kind).is_some(),
                     "palette section {:?} names unknown type `{kind}`",
                     section.title
                 );
@@ -1357,6 +1464,36 @@ mod check {
         for kind in LIST_TYPES.iter().chain(DICT_TYPES) {
             assert!(kinds.contains(kind), "collection type `{kind}` has no row");
         }
+    }
+
+    #[test]
+    fn every_block_and_reporter_has_a_section() {
+        let named: HashSet<&str> = SECTIONS.iter().flat_map(|s| s.items.iter().copied()).collect();
+        let collection: HashSet<&str> = LIST_TYPES
+            .iter()
+            .chain(DICT_TYPES)
+            .chain(["SetVariable", "ChangeVariable", "BlockHeader", "CallBlock"].iter())
+            .copied()
+            .collect();
+        for row in ROWS {
+            assert!(
+                named.contains(row.kind) || collection.contains(row.kind),
+                "{} isn't in any palette section",
+                row.kind
+            );
+        }
+        for spec in crate::reporters::REPORTERS {
+            assert!(named.contains(spec.kind), "{} isn't in any palette section", spec.kind);
+        }
+    }
+
+    #[test]
+    fn self_drawn_types_get_no_row() {
+        let rows = rows_json();
+        for kind in SELF_DRAWN {
+            assert!(rows.get(*kind).is_none(), "{kind} would replace blockstitch's drawing");
+        }
+        assert!(rows.get("RegisterBlock").is_some());
     }
 
     #[test]

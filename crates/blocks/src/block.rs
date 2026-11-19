@@ -20,7 +20,7 @@
 use crate::kinds::{
     EntityBase, MaterialPreset, MessageKind, MobCategoryKind, Rarity, Target, Weather,
 };
-use blockstitch_core::graph::{BlockDef, BlockKind, InputValueType, Instruction};
+use blockstitch_core::graph::{BlockDef, BlockKind, InputValueType, Instruction, RefKind};
 use blockstitch_core::value::Value;
 use serde::{Deserialize, Serialize};
 
@@ -354,9 +354,14 @@ macro_rules! value_fields {
     };
 }
 
-/// The index an `argN` field id names on a [`McBlock::CallBlock`].
+/// The index an `argN` (or blockstitch's `CallArg:N`) field id names on a
+/// [`McBlock::CallBlock`].
 fn arg_index(field: &str) -> Option<usize> {
-    field.strip_prefix("arg")?.parse().ok()
+    field
+        .strip_prefix("CallArg:")
+        .or_else(|| field.strip_prefix("arg"))?
+        .parse()
+        .ok()
 }
 
 /// Fields typed as whole numbers, so a typed edit is parsed as an integer
@@ -410,6 +415,19 @@ impl McBlock {
         While { condition: Bool }
         ScheduleAfter { ticks }
         Return { value }
+    }
+
+    /// The field a slot id names. blockstitch draws `If`, `IfElse`, `While`
+    /// and `Repeat` itself and addresses their slots as `Condition` and
+    /// `RepeatCount`; everything else uses the field name as its id.
+    fn canonical_field<'a>(&self, field: &'a str) -> &'a str {
+        match (self, field) {
+            (McBlock::If { .. } | McBlock::IfElse { .. } | McBlock::While { .. }, "Condition") => {
+                "condition"
+            }
+            (McBlock::Repeat { .. }, "RepeatCount") => "count",
+            _ => field,
+        }
     }
 
     /// The registry id this declaration defines, or `None` for anything that
@@ -503,35 +521,32 @@ impl BlockKind for McBlock {
         }
     }
 
-    fn variable_target_mut(&mut self) -> Option<&mut String> {
+    fn visit_refs_mut(&mut self, f: &mut dyn FnMut(RefKind, &mut String)) {
         match self {
-            McBlock::SetVariable { name, .. } | McBlock::ChangeVariable { name, .. } => Some(name),
-            _ => None,
-        }
-    }
-
-    fn list_target_mut(&mut self) -> Option<&mut String> {
-        match self {
+            McBlock::SetVariable { name, .. } | McBlock::ChangeVariable { name, .. } => {
+                f(RefKind::Variable, name)
+            }
             McBlock::AddToList { name, .. }
             | McBlock::DeleteOfList { name, .. }
             | McBlock::DeleteAllOfList { name }
             | McBlock::InsertIntoList { name, .. }
-            | McBlock::ReplaceItemOfList { name, .. } => Some(name),
-            _ => None,
-        }
-    }
-
-    fn dict_target_mut(&mut self) -> Option<&mut String> {
-        match self {
+            | McBlock::ReplaceItemOfList { name, .. } => f(RefKind::List, name),
             McBlock::DictSet { name, .. }
             | McBlock::DictDelete { name, .. }
-            | McBlock::DictClear { name } => Some(name),
-            _ => None,
+            | McBlock::DictClear { name } => f(RefKind::Dict, name),
+            _ => {}
         }
     }
 
     fn calls_block(&self, block_id: &str) -> bool {
         matches!(self, McBlock::CallBlock { block_id: id, .. } if id == block_id)
+    }
+
+    fn called_block(&self) -> Option<&str> {
+        match self {
+            McBlock::CallBlock { block_id, .. } => Some(block_id),
+            _ => None,
+        }
     }
 
     fn call_args_mut(&mut self, block_id: &str) -> Option<&mut Vec<Value>> {
@@ -549,10 +564,12 @@ impl BlockKind for McBlock {
     }
 
     fn value_slot_mut(&mut self, field: &str) -> Option<&mut Value> {
+        let field = self.canonical_field(field);
         self.own_slot_mut(field)
     }
 
     fn blank_field_value(&self, field: &str, blocks: &[BlockDef]) -> Option<Value> {
+        let field = self.canonical_field(field);
         if let McBlock::CallBlock { block_id, .. } = self {
             let index = arg_index(field)?;
             let declared = blocks
@@ -570,7 +587,7 @@ impl BlockKind for McBlock {
     }
 
     fn field_requires_integer(&self, field: &str) -> bool {
-        INTEGER_FIELDS.contains(&field)
+        INTEGER_FIELDS.contains(&self.canonical_field(field))
     }
 }
 
@@ -654,6 +671,9 @@ mod tests {
 
         let def = BlockDef {
             id: "def".into(),
+            identifier: String::new(),
+            description: String::new(),
+            icon: String::new(),
             pieces: vec![
                 BlockPiece::Label {
                     id: "l".into(),
@@ -663,11 +683,17 @@ mod tests {
                     id: "i0".into(),
                     name: "amount".into(),
                     value_type: InputValueType::Any,
+                    component: false,
+                    default_value: None,
+                    multiline: false,
                 },
                 BlockPiece::Input {
                     id: "i1".into(),
                     name: "loudly".into(),
                     value_type: InputValueType::Bool,
+                    component: false,
+                    default_value: None,
+                    multiline: false,
                 },
             ],
             shape: BlockShape::Normal,
@@ -679,6 +705,26 @@ mod tests {
             Some(Value::Bool),
             "a boolean input blanks back to an empty hexagon"
         );
+    }
+
+    #[test]
+    fn blockstitchs_own_slot_ids_reach_the_right_field() {
+        let mut repeat = McBlock::Repeat {
+            count: number(10.0),
+            body: vec![],
+        };
+        assert_eq!(repeat.value_slot_mut("RepeatCount").cloned(), Some(number(10.0)));
+        assert!(repeat.field_requires_integer("RepeatCount"));
+        let branch = McBlock::While {
+            condition: Value::Bool,
+            body: vec![],
+        };
+        assert_eq!(branch.blank_field_value("Condition", &[]), Some(Value::Bool));
+        let mut call = McBlock::CallBlock {
+            block_id: "b".into(),
+            args: vec![number(1.0), number(2.0)],
+        };
+        assert_eq!(call.value_slot_mut("CallArg:1").cloned(), Some(number(2.0)));
     }
 
     #[test]

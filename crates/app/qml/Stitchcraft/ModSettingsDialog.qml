@@ -1,19 +1,21 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import com.blockworked.Blockstitch
 
-// The mod's identity: what goes in `fabric.mod.json`, `neoforge.mods.toml` and
-// the namespace every registered id gets.
+// The mod's identity: what goes in `fabric.mod.json`, `neoforge.mods.toml`
+// and the namespace every registered id gets.
 //
-// The mod id is the one field with a shape the rest of the export depends on, so
-// it is sanitized on the way through rather than validated after the fact.
-BwDialog {
+// The mod id is the one field the rest of the export depends on the shape
+// of, so the backend sanitizes it on the way through.
+StitchDialog {
     id: root
 
     required property var backend
 
-    title: "Mod settings"
-    standardButtons: Dialog.Ok | Dialog.Cancel
+    title: qsTr("Mod settings")
+    width: 460
+    standardButtons: Dialog.NoButton
     closePolicy: Popup.CloseOnEscape
 
     function openForEdit() {
@@ -27,65 +29,72 @@ BwDialog {
         idField.forceActiveFocus();
     }
 
-    onAccepted: backend.setMetadata(
-        idField.text,
-        nameField.text,
-        versionField.text,
-        packageField.text,
-        fabricSwitch.checked,
-        neoforgeSwitch.checked
-    )
+    onAccepted: backend.setMetadata(idField.text, nameField.text, versionField.text,
+                                    packageField.text, fabricSwitch.checked, neoforgeSwitch.checked)
 
-    Column {
-        width: 400
-        spacing: 10
+    component Label: Text {
+        color: Theme.text
+        font.pixelSize: 13
+        font.weight: Font.DemiBold
+        Layout.topMargin: 6
+    }
+    component Hint: Text {
+        Layout.fillWidth: true
+        wrapMode: Text.WordWrap
+        color: Theme.textDim
+        font.pixelSize: 12
+    }
 
-        Text { text: "Mod id"; color: Theme.text; font.pixelSize: 12 }
-        BwTextField {
-            id: idField
-            width: parent.width
-            placeholderText: "wonder_blocks"
-        }
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "Lowercase letters, digits and underscores. Everything the canvas registers is namespaced with this."
-            color: Theme.textDim
-            font.pixelSize: 11
-        }
+    ColumnLayout {
+        width: parent.width
+        spacing: 6
 
-        Text { text: "Display name"; color: Theme.text; font.pixelSize: 12 }
-        BwTextField { id: nameField; width: parent.width; placeholderText: "Wonder Blocks" }
+        Label { text: qsTr("Mod id"); Layout.topMargin: 0 }
+        StitchTextField { id: idField; Layout.fillWidth: true; placeholderText: "wonder_blocks"; onAccepted: root.accept() }
+        Hint { text: qsTr("Lowercase letters, digits and underscores. Everything the canvas registers is named under it.") }
 
-        Text { text: "Version"; color: Theme.text; font.pixelSize: 12 }
-        BwTextField { id: versionField; width: parent.width; placeholderText: "1.0.0" }
+        Label { text: qsTr("Display name") }
+        StitchTextField { id: nameField; Layout.fillWidth: true; placeholderText: "Wonder Blocks"; onAccepted: root.accept() }
 
-        Text { text: "Java package"; color: Theme.text; font.pixelSize: 12 }
-        BwTextField { id: packageField; width: parent.width; placeholderText: "com.example.wonder_blocks" }
-
-        Text { text: "Export for"; color: Theme.text; font.pixelSize: 12 }
-        Row {
-            spacing: 16
-            Row {
-                spacing: 7
-                BwSwitch { id: fabricSwitch }
-                Text {
-                    anchors.verticalCenter: fabricSwitch.verticalCenter
-                    text: "Fabric"
-                    color: Theme.text
-                    font.pixelSize: 12
-                }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            ColumnLayout {
+                Layout.preferredWidth: 120
+                spacing: 6
+                Label { text: qsTr("Version") }
+                StitchTextField { id: versionField; Layout.fillWidth: true; placeholderText: "1.0.0"; onAccepted: root.accept() }
             }
-            Row {
-                spacing: 7
-                BwSwitch { id: neoforgeSwitch }
-                Text {
-                    anchors.verticalCenter: neoforgeSwitch.verticalCenter
-                    text: "NeoForge"
-                    color: Theme.text
-                    font.pixelSize: 12
-                }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Java package") }
+                StitchTextField { id: packageField; Layout.fillWidth: true; placeholderText: "com.example.wonder_blocks"; onAccepted: root.accept() }
             }
+        }
+
+        Label { text: qsTr("Build for") }
+        RowLayout {
+            spacing: 20
+            RowLayout {
+                spacing: 8
+                StitchSwitch { id: fabricSwitch }
+                Text { text: "Fabric"; color: Theme.text; font.pixelSize: 13 }
+            }
+            RowLayout {
+                spacing: 8
+                StitchSwitch { id: neoforgeSwitch }
+                Text { text: "NeoForge"; color: Theme.text; font.pixelSize: 13 }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.topMargin: 14
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            StitchButton { text: qsTr("Cancel"); onClicked: root.reject() }
+            StitchButton { text: qsTr("Save"); primary: true; onClicked: root.accept() }
         }
     }
 }

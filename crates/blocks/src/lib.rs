@@ -38,6 +38,7 @@ pub mod block;
 pub mod catalog;
 pub mod context;
 pub mod document;
+pub mod editing;
 pub mod kinds;
 pub mod reporters;
 pub mod validate;

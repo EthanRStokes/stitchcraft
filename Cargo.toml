@@ -1,7 +1,7 @@
 # Stitchcraft: a Scratch-style block editor whose canvas exports a Minecraft
 # mod for Fabric and NeoForge.
 #
-# blockstitch is pulled straight from GitHub (its `qml` branch) rather than copied
+# blockstitch is pulled straight from GitHub (pinned to the same master commit as Blockwork) rather than copied
 # into this repository; Cargo.lock pins the exact commit. Both crates live in that
 # one repository, so Cargo finds each by name.
 
@@ -19,8 +19,8 @@ license = "GPL-3.0-or-later"
 rust-version = "1.85"
 
 [workspace.dependencies]
-blockstitch-core = { git = "https://github.com/Blockworked/blockstitch", branch = "qml" }
-blockstitch-qml = { git = "https://github.com/Blockworked/blockstitch", branch = "qml" }
+blockstitch-core = { git = "https://github.com/Blockworked/blockstitch", rev = "23f26f682f729094710ed4e29efb6ac13980841f" }
+blockstitch-qml = { git = "https://github.com/Blockworked/blockstitch", rev = "23f26f682f729094710ed4e29efb6ac13980841f" }
 stitchcraft-blocks = { path = "crates/blocks" }
 stitchcraft-export = { path = "crates/export" }
 serde = { version = "1.0.229", features = ["derive"] }
