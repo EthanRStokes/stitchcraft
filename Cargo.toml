@@ -7,7 +7,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/blocks", "crates/export", "crates/app"]
+members = ["crates/blocks", "crates/export", "crates/devtools", "crates/app"]
 # A bare `cargo run`/`cargo build` means the editor. Use `cargo test --workspace` to
 # test everything.
 default-members = ["crates/app"]
@@ -23,5 +23,6 @@ blockstitch-core = { git = "https://github.com/Blockworked/blockstitch", rev = "
 blockstitch-qml = { git = "https://github.com/Blockworked/blockstitch", rev = "23f26f682f729094710ed4e29efb6ac13980841f" }
 stitchcraft-blocks = { path = "crates/blocks" }
 stitchcraft-export = { path = "crates/export" }
+stitchcraft-devtools = { path = "crates/devtools" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

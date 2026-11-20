@@ -17,6 +17,8 @@ use serde_json::{Value as Json, json};
 use std::pin::Pin;
 use stitchcraft_blocks::editing::Session;
 use stitchcraft_blocks::{ModProject, catalog, reporters, validate};
+use stitchcraft_devtools::session::{Refusal, copy_jars};
+use stitchcraft_devtools::{Action, DevTools, Loader};
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -53,6 +55,11 @@ pub mod qobject {
         /// `{"ok": false, "error": "..."}`.
         #[qinvokable]
         fn invoke(self: Pin<&mut Backend>, command: &QString, args: &QString) -> QString;
+
+        /// The dev tools: building jars, development runs and the debugger.
+        /// `command` and the answer are JSON in and out; see `dev` below.
+        #[qinvokable]
+        fn dev(self: Pin<&mut Backend>, command: &QString, args: &QString) -> QString;
 
         #[qinvokable]
         #[cxx_name = "newProject"]
@@ -103,6 +110,7 @@ pub struct BackendRust {
     session: Session,
     /// The session revision last pushed to QML.
     published: u64,
+    dev: DevTools,
 }
 
 impl Default for BackendRust {
@@ -141,6 +149,7 @@ impl Default for BackendRust {
             status: QString::from(&status),
             session: Session::new(project),
             published: 0,
+            dev: DevTools::new(stitchcraft_devtools::data_dir()),
         };
         // Derived here as well as in `refresh`, so an opened project is on the
         // canvas before the first edit.
@@ -371,6 +380,97 @@ impl qobject::Backend {
         }
         self.say(message);
         true
+    }
+
+    /// One dev-tools call. Every answer is `{"ok": true, ...}` or
+    /// `{"ok": false, "error": "..."}`; `start` may instead answer
+    /// `{"ok": false, "refusal": {"reason": ...}}` when the user has to do
+    /// something first (get Java, accept the EULA).
+    fn dev(mut self: Pin<&mut Self>, command: &QString, args: &QString) -> QString {
+        let args: Json = serde_json::from_str(&text(args)).unwrap_or(Json::Null);
+        let answer = self.as_mut().dev_command(&text(command), &args);
+        QString::from(&answer.to_string())
+    }
+
+    fn dev_command(mut self: Pin<&mut Self>, command: &str, args: &Json) -> Json {
+        let string = |key: &str| args[key].as_str().unwrap_or("").to_string();
+        let job = args["job"].as_u64().unwrap_or(0) as u32;
+        let mut rust = self.as_mut().rust_mut();
+        let rust = &mut *rust;
+        let dev = &mut rust.dev;
+        match command {
+            "poll" => json!({ "ok": true, "events": dev.poll() }),
+            "java" => match dev.java() {
+                Some(java) => json!({ "ok": true, "found": true, "version": java.version,
+                                      "home": java.home.display().to_string(),
+                                      "downloading": dev.downloading_java() }),
+                None => json!({ "ok": true, "found": false, "downloading": dev.downloading_java() }),
+            },
+            "downloadJava" => {
+                dev.download_java();
+                json!({ "ok": true })
+            }
+            "start" => {
+                let Some(action) = Action::parse(&string("action")) else {
+                    return json!({ "ok": false, "error": "unknown action" });
+                };
+                let loaders: Vec<Loader> = args["loaders"]
+                    .as_array()
+                    .map(|list| list.iter().filter_map(|l| l.as_str().and_then(Loader::parse)).collect())
+                    .unwrap_or_default();
+                let debug = args["debug"].as_bool().unwrap_or(false);
+                match dev.start(&rust.session.project, action, &loaders, debug) {
+                    Ok(job) => json!({ "ok": true, "job": job }),
+                    Err(Refusal::Failed { message }) => json!({ "ok": false, "error": message }),
+                    Err(refusal) => json!({ "ok": false, "refusal": refusal }),
+                }
+            }
+            "stop" => {
+                dev.stop(job);
+                json!({ "ok": true })
+            }
+            "stopAll" => {
+                dev.stop_all();
+                json!({ "ok": true })
+            }
+            "input" => {
+                dev.send_input(job, &string("line"));
+                json!({ "ok": true })
+            }
+            "acceptEula" => {
+                let loader = Loader::parse(&string("loader")).unwrap_or(Loader::Fabric);
+                match dev.accept_eula(&rust.session.project.mod_id, loader) {
+                    Ok(()) => json!({ "ok": true }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                }
+            }
+            "breakpoints" => {
+                let ids = args["ids"]
+                    .as_array()
+                    .map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                dev.set_breakpoints(ids);
+                json!({ "ok": true })
+            }
+            "debug" => {
+                let side = string("side");
+                dev.debug_command((!side.is_empty()).then_some(side.as_str()), &string("command"));
+                json!({ "ok": true })
+            }
+            "copyJars" => {
+                let jars: Vec<String> = args["jars"]
+                    .as_array()
+                    .map(|jars| jars.iter().filter_map(|j| j.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                match copy_jars(&jars, std::path::Path::new(&string("directory"))) {
+                    Ok(paths) => json!({ "ok": true, "paths": paths }),
+                    Err(error) => json!({ "ok": false, "error": error }),
+                }
+            }
+            "workspace" => json!({ "ok": true,
+                "path": dev.workspace(&rust.session.project.mod_id).display().to_string() }),
+            other => json!({ "ok": false, "error": format!("unknown dev command `{other}`") }),
+        }
     }
 
     fn set_metadata(

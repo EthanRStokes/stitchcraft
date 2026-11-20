@@ -48,6 +48,8 @@ pub struct Emitter<'a> {
     pending: Vec<Pending>,
     /// Suffix for the next generated local or method name, unique per export.
     counter: usize,
+    /// Precede each statement with a `Dbg.at` call - see `Options::debug`.
+    debug: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -57,7 +59,14 @@ impl<'a> Emitter<'a> {
             project,
             pending: Vec::new(),
             counter: 0,
+            debug: false,
         }
+    }
+
+    /// Instruments every statement for the editor's debugger.
+    pub fn debugging(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
     }
 
     fn fresh(&mut self, stem: &str) -> String {
@@ -95,6 +104,9 @@ impl<'a> Emitter<'a> {
         ctx: Ctx<'_>,
     ) {
         for instruction in instructions {
+            if self.debug {
+                source.line(format!("Dbg.at({});", quote(&instruction.id)));
+            }
             self.statement(source, &instruction.kind, mode, ctx);
         }
     }
@@ -232,13 +244,14 @@ impl<'a> Emitter<'a> {
                 target,
                 effect,
                 seconds,
-                amplifier,
+                level,
+                ..
             } => source.line(format!(
                 "Rt.addEffect({c}, {}, {}, {}, {});",
                 target_constant(*target),
                 id(effect),
                 int(seconds),
-                int(amplifier)
+                int(level)
             )),
             McBlock::TeleportTarget { target, x, y, z } => source.line(format!(
                 "Rt.teleport({c}, {}, {}, {}, {});",

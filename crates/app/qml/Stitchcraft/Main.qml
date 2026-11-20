@@ -24,6 +24,68 @@ ApplicationWindow {
 
     Backend { id: backend }
     BlockRows { id: blockRows; backend: backend }
+    DevTools {
+        id: dev
+        backend: backend
+        onJavaNeeded: devDialogs.askForJava()
+        onEulaNeeded: loader => devDialogs.askForEula(loader)
+        onFailed: message => backend.status = message
+        onJarsReady: jars => backend.status = qsTr("Built %n jar(s). Save them from the console.", "", jars.length)
+    }
+    DevDialogs { id: devDialogs; dev: dev }
+
+    // What Run and Debug start: a client, a server, or both, on one loader.
+    property string runTarget: "client"
+    property string runLoader: backend.fabric ? "fabric" : "neoforge"
+    readonly property var enabledLoaders: (backend.fabric ? ["fabric"] : []).concat(backend.neoforge ? ["neoforge"] : [])
+    onEnabledLoadersChanged: if (enabledLoaders.length && enabledLoaders.indexOf(runLoader) < 0) runLoader = enabledLoaders[0]
+    readonly property string loaderLabel: runLoader === "fabric" ? "Fabric" : "NeoForge"
+    readonly property string targetLabel: runTarget === "client" ? qsTr("client") : runTarget === "server" ? qsTr("server") : qsTr("client + server")
+    property bool consoleOpen: false
+
+    function run(debug) {
+        consoleOpen = true;
+        if (runTarget === "both") {
+            if (dev.start("server", [runLoader], debug)) dev.start("client", [runLoader], debug);
+        } else {
+            dev.start(runTarget, [runLoader], debug);
+        }
+    }
+    function buildJars() {
+        consoleOpen = true;
+        dev.start("build", enabledLoaders, false);
+    }
+
+    // A block's name for the debugger: its first label, or its type spelt out.
+    function findInstruction(id) {
+        function walk(list) {
+            for (const ins of list || []) {
+                if (ins.id === id) return ins;
+                for (const key of ["body", "then_body", "else_body"]) {
+                    const found = walk(ins[key]);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+        for (const strand of document.strands || []) {
+            const found = walk(strand.instructions);
+            if (found) return found;
+        }
+        return null;
+    }
+    function blockTitle(id) {
+        const ins = findInstruction(id);
+        if (!ins) return qsTr("a block");
+        const row = (catalog.rows || {})[ins.type];
+        const label = row && (row.head || []).find(p => p.kind === "label");
+        if (label) return label.text;
+        return ins.type.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+    }
+    function blockMenu() {
+        return [{ id: "breakpoint", text: qsTr("Toggle breakpoint"), icon: "circle-dot",
+                  when: (instruction, strandId, path) => !!instruction && !(path.length === 1 && path[0].index === 0) }];
+    }
 
     // The document, parsed once per change rather than per binding.
     readonly property var document: JSON.parse(backend.documentJson || "{}")
@@ -163,13 +225,81 @@ ApplicationWindow {
 
                 StitchButton {
                     implicitHeight: 34
-                    iconName: "download"
-                    iconColor: Theme.accent
-                    text: qsTr("Export mod")
+                    iconName: "folder-output"
+                    text: qsTr("Export source")
                     ToolTip.visible: hovered
                     ToolTip.delay: 500
-                    ToolTip.text: (backend.fabric ? "Fabric" : "") + (backend.fabric && backend.neoforge ? " + " : "") + (backend.neoforge ? "NeoForge" : "")
+                    ToolTip.text: qsTr("Write the mod's Gradle project to a folder, to keep or open in an IDE")
                     onClicked: exportDialog.open()
+                }
+                StitchButton {
+                    implicitHeight: 34
+                    iconName: "package"
+                    text: dev.building ? qsTr("Building…") : qsTr("Build jars")
+                    enabled: !dev.busy
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: qsTr("Compile ready-to-install jars for %1").arg(window.enabledLoaders.map(l => l === "fabric" ? "Fabric" : "NeoForge").join(" and "))
+                    onClicked: window.buildJars()
+                }
+                Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 22; color: Theme.border; Layout.leftMargin: 2; Layout.rightMargin: 2 }
+
+                // Run and Debug share one target, picked from the chevron.
+                Row {
+                    visible: !dev.runningGame
+                    spacing: 0
+                    StitchButton {
+                        id: runButton
+                        implicitHeight: 34
+                        iconName: "play"
+                        iconColor: Theme.running
+                        text: qsTr("Run")
+                        enabled: !dev.building
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Start a %1 %2 with this mod in it").arg(window.loaderLabel).arg(window.targetLabel)
+                        onClicked: window.run(false)
+                    }
+                    StitchButton {
+                        implicitHeight: 34
+                        iconName: "bug"
+                        text: qsTr("Debug")
+                        enabled: !dev.building
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Run with block highlighting, breakpoints and live variables")
+                        onClicked: window.run(true)
+                    }
+                    IconButton {
+                        id: targetButton
+                        iconName: "chevron-down"
+                        tip: targetMenu.visible ? "" : qsTr("%1 %2").arg(window.loaderLabel).arg(window.targetLabel)
+                        implicitWidth: 28
+                        onClicked: targetMenu.popup(targetButton, 0, targetButton.height + 4)
+                        StitchMenu {
+                            id: targetMenu
+                            implicitWidth: 230
+                            StitchMenuItem { iconName: window.runTarget === "client" ? "check" : "blank"; text: qsTr("Client"); onTriggered: window.runTarget = "client" }
+                            StitchMenuItem { iconName: window.runTarget === "server" ? "check" : "blank"; text: qsTr("Server"); onTriggered: window.runTarget = "server" }
+                            StitchMenuItem { iconName: window.runTarget === "both" ? "check" : "blank"; text: qsTr("Client and server"); onTriggered: window.runTarget = "both" }
+                            MenuSeparator { visible: window.enabledLoaders.length > 1; height: visible ? implicitHeight : 0 }
+                            StitchMenuItem { visible: backend.fabric && backend.neoforge; height: visible ? implicitHeight : 0; iconName: window.runLoader === "fabric" ? "check" : "blank"; text: "Fabric"; onTriggered: window.runLoader = "fabric" }
+                            StitchMenuItem { visible: backend.fabric && backend.neoforge; height: visible ? implicitHeight : 0; iconName: window.runLoader === "neoforge" ? "check" : "blank"; text: "NeoForge"; onTriggered: window.runLoader = "neoforge" }
+                        }
+                    }
+                }
+                StitchButton {
+                    visible: dev.runningGame
+                    implicitHeight: 34
+                    iconName: "square"
+                    danger: true
+                    text: qsTr("Stop")
+                    onClicked: dev.stopAll()
+                }
+                IconButton {
+                    iconName: "terminal"
+                    tip: window.consoleOpen ? qsTr("Hide the console") : qsTr("Show the console")
+                    onClicked: window.consoleOpen = !window.consoleOpen
                 }
 
                 Item { Layout.fillWidth: true }
@@ -256,6 +386,15 @@ ApplicationWindow {
                 blockDefinitions: window.document.block_defs || []
 
                 canPaste: !!window.clipboard && window.clipboard.instructions.length > 0
+
+                // The debugger's marks: what just ran, where a game is
+                // paused, the breakpoints, and blocks that threw.
+                runningIds: dev.runningIds
+                pausedIds: dev.pausedIds
+                breakpointIds: dev.breakpoints
+                blockMarks: dev.failures
+                onBreakpointClicked: instructionId => dev.toggleBreakpoint(instructionId)
+                onMarkClicked: instructionId => { window.consoleOpen = true; }
                 clearText: qsTr("Delete all blocks")
                 onClearRequested: clearConfirm.open()
                 onCanvasMenuAction: (action, x, y) => {
@@ -266,7 +405,8 @@ ApplicationWindow {
                     if (action === "edit_block") {
                         const def = window.blockDefById(instruction.block_id);
                         if (def) blockDialog.openForEdit(def);
-                    } else if (action === "copy") window.copyBlocks(strandId, path, 1);
+                    } else if (action === "breakpoint") dev.toggleBreakpoint(instruction.id);
+                    else if (action === "copy") window.copyBlocks(strandId, path, 1);
                     else if (action === "copy_all") window.copyBlocks(strandId, path, null);
                     else if (action === "cut") window.copyBlocks(strandId, path, 1, () => window.removeInstruction(strandId, path));
                 }
@@ -318,6 +458,19 @@ ApplicationWindow {
                 trashContains: (sx, sy) => palette.visible && palette.contains(palette.mapFromItem(null, sx, sy))
                 submit: (edit, reply) => window.invoke(edit.kind, edit, () => reply(true), error => reply(false, error))
             }
+        }
+
+        ConsolePanel {
+            id: consolePanel
+            visible: window.consoleOpen
+            Layout.fillWidth: true
+            Layout.preferredHeight: panelHeight
+            dev: dev
+            blockTitle: id => window.blockTitle(id)
+            onRevealRequested: id => canvas.revealInstruction(id)
+            onSaveJarsRequested: jars => { jarsDialog.jars = jars; jarsDialog.open(); }
+            onOpenFolderRequested: path => Qt.openUrlExternally("file://" + (path.startsWith("/") ? "" : "/") + path)
+            onHideRequested: window.consoleOpen = false
         }
 
         DiagnosticsBar {
@@ -394,12 +547,22 @@ ApplicationWindow {
         onAccepted: backend.save(window.localPath(selectedFile))
     }
     FolderDialog {
+        id: jarsDialog
+        property var jars: []
+        title: qsTr("Save the jars into")
+        onAccepted: {
+            const answer = dev.call("copyJars", { jars: jars, directory: window.localPath(selectedFolder) });
+            backend.status = answer.ok ? qsTr("Saved %n jar(s).", "", jars.length) : answer.error;
+        }
+    }
+    FolderDialog {
         id: exportDialog
         title: qsTr("Export the mod into")
         onAccepted: backend.exportMod(window.localPath(selectedFolder))
     }
 
     Component.onCompleted: {
+        BlockRegistry.blockMenu = window.blockMenu();
         // A brand new project's id is a placeholder, and every registered
         // block is named under it, so ask first.
         if (!backend.documentPath.length && backend.modId === "example_mod") modSettings.openForEdit();

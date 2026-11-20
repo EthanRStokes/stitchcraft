@@ -1,0 +1,23 @@
+[package]
+name = "stitchcraft-devtools"
+description = "Stitchcraft's dev tools: building jars, running a development game and debugging the canvas in it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+stitchcraft-blocks.workspace = true
+stitchcraft-export.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["tls", "native-certs"] }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+blockstitch-core.workspace = true

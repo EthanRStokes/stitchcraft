@@ -108,7 +108,7 @@ fn ctx(names: &Names) -> String {
         );
         s.blank();
         s.braced("public static Ctx of(ServerPlayer player)", |s| {
-            s.line("return new Ctx(player.getServer(), player.level(), player.blockPosition(), player, null, null, 0.0D);");
+            s.line("return new Ctx(player.level().getServer(), player.level(), player.blockPosition(), player, null, null, 0.0D);");
         });
         s.blank();
         s.braced("public static Ctx of(LivingEntity entity)", |s| {
@@ -532,7 +532,7 @@ fn rt(names: &Names) -> String {
                 s.open("for (LivingEntity entity : resolve(ctx, target)) {");
                 s.line("if (!(entity instanceof ServerPlayer player)) continue;");
                 s.open("if (actionBar) {");
-                s.line("player.displayClientMessage(component, true);");
+                s.line("player.sendOverlayMessage(component);");
                 s.pivot("} else {");
                 s.line("player.sendSystemMessage(component);");
                 s.close("}");
@@ -553,6 +553,12 @@ fn rt(names: &Names) -> String {
             s.line("ctx.server.getCommands().performPrefixedCommand(ctx.server.createCommandSourceStack(), command);");
         });
         s.blank();
+        s.doc("A command run for its effect alone, without telling operators about it.");
+        s.braced("private static void quietCommand(Ctx ctx, String command)", |s| {
+            s.line("if (ctx.server == null) return;");
+            s.line("ctx.server.getCommands().performPrefixedCommand(ctx.server.createCommandSourceStack().withSuppressedOutput(), command);");
+        });
+        s.blank();
         s.braced("public static void setBlock(Ctx ctx, double x, double y, double z, String id)", |s| {
             s.line("if (ctx.level == null) return;");
             s.line("final Block target = block(id);");
@@ -571,7 +577,7 @@ fn rt(names: &Names) -> String {
             s.line("if (type == null) return;");
             s.line("final Entity spawned = type.create(ctx.level, net.minecraft.world.entity.EntitySpawnReason.COMMAND);");
             s.line("if (spawned == null) return;");
-            s.line("spawned.moveTo(x, y, z, spawned.getYRot(), spawned.getXRot());");
+            s.line("spawned.snapTo(x, y, z, spawned.getYRot(), spawned.getXRot());");
             s.line("ctx.level.addFreshEntity(spawned);");
         });
         s.blank();
@@ -630,14 +636,14 @@ fn rt(names: &Names) -> String {
         });
         s.blank();
         s.braced(
-            "public static void addEffect(Ctx ctx, Target target, String id, int seconds, int amplifier)",
+            "public static void addEffect(Ctx ctx, Target target, String id, int seconds, int level)",
             |s| {
                 s.line("final Identifier key = parse(id);");
                 s.line("if (key == null) return;");
                 s.line("final Optional<Holder.Reference<MobEffect>> effect = BuiltInRegistries.MOB_EFFECT.get(key);");
                 s.line("if (effect.isEmpty()) return;");
                 s.open("for (LivingEntity entity : resolve(ctx, target)) {");
-                s.line("entity.addEffect(new MobEffectInstance(effect.get(), Math.max(1, seconds) * 20, Math.max(0, amplifier)));");
+                s.line("entity.addEffect(new MobEffectInstance(effect.get(), Math.max(1, seconds) * 20, Math.max(0, level - 1)));");
                 s.close("}");
             },
         );
@@ -657,7 +663,7 @@ fn rt(names: &Names) -> String {
                 s.open("for (LivingEntity entity : resolve(ctx, target)) {");
                 s.line("entity.setDeltaMovement(entity.getDeltaMovement().add(new Vec3(x, y, z)));");
                 s.comment("Without this the client never sees the change.");
-                s.line("entity.hurtMarked = true;");
+                s.line("entity.needsSync = true;");
                 s.close("}");
             },
         );
@@ -671,17 +677,19 @@ fn rt(names: &Names) -> String {
         );
         s.blank();
         s.braced("public static void setTimeOfDay(Ctx ctx, int time)", |s| {
-            s.line("if (ctx.level == null) return;");
-            s.line("ctx.level.setDayTime(time);");
+            s.comment(
+                "Through the `time` command: since the world clocks of 26.1 there \
+                 is no one setter, and the command is what stays stable.",
+            );
+            s.line("quietCommand(ctx, \"time set \" + Math.floorMod(time, 24000));");
         });
         s.blank();
         s.braced("public static void setWeather(Ctx ctx, Weather weather, int seconds)", |s| {
-            s.line("if (ctx.level == null) return;");
-            s.line("final int ticks = Math.max(1, seconds) * 20;");
+            s.line("final int duration = Math.max(1, seconds);");
             s.open("switch (weather) {");
-            s.line("case CLEAR -> ctx.level.setWeatherParameters(ticks, 0, false, false);");
-            s.line("case RAIN -> ctx.level.setWeatherParameters(0, ticks, true, false);");
-            s.line("case THUNDER -> ctx.level.setWeatherParameters(0, ticks, true, true);");
+            s.line("case CLEAR -> quietCommand(ctx, \"weather clear \" + duration + \"s\");");
+            s.line("case RAIN -> quietCommand(ctx, \"weather rain \" + duration + \"s\");");
+            s.line("case THUNDER -> quietCommand(ctx, \"weather thunder \" + duration + \"s\");");
             s.close("}");
         });
         s.blank();
@@ -722,11 +730,11 @@ fn rt(names: &Names) -> String {
         });
         s.blank();
         s.braced("public static double timeOfDay(Ctx ctx)", |s| {
-            s.line("return ctx.level == null ? 0.0D : ctx.level.getDayTime() % 24000L;");
+            s.line("return ctx.level == null ? 0.0D : ctx.level.getDefaultClockTime() % 24000L;");
         });
         s.blank();
         s.braced("public static String difficulty(Ctx ctx)", |s| {
-            s.line("return ctx.level == null ? \"\" : ctx.level.getDifficulty().getKey();");
+            s.line("return ctx.level == null ? \"\" : ctx.level.getDifficulty().getSerializedName();");
         });
         s.blank();
         s.braced("public static String levelName(Ctx ctx)", |s| {
@@ -975,8 +983,8 @@ fn vars(names: &Names) -> String {
             s.line("return primitive.getAsString();");
         });
         s.blank();
-        s.braced("public static void save()", |s| {
-            s.open("try {");
+        s.doc("Everything the canvas declared, as one JSON object: what is saved, and what the debugger shows.");
+        s.braced("public static JsonObject snapshot()", |s| {
             s.line("final JsonObject root = new JsonObject();");
             s.line("final JsonObject variables = new JsonObject();");
             s.open("for (Map.Entry<String, Object> entry : VARIABLES.entrySet()) {");
@@ -997,6 +1005,17 @@ fn vars(names: &Names) -> String {
             s.line("dicts.add(entry.getKey(), one);");
             s.close("}");
             s.line("root.add(\"dicts\", dicts);");
+            s.line("return root;");
+        });
+        s.blank();
+        s.doc("The snapshot on one line, for the editor's debugger.");
+        s.braced("public static String debugJson()", |s| {
+            s.line("return new Gson().toJson(snapshot());");
+        });
+        s.blank();
+        s.braced("public static void save()", |s| {
+            s.open("try {");
+            s.line("final JsonObject root = snapshot();");
             s.line("final Path path = file();");
             s.line("Files.createDirectories(path.getParent());");
             s.line("Files.writeString(path, GSON.toJson(root), StandardCharsets.UTF_8);");
@@ -1120,5 +1139,210 @@ fn scheduler(names: &Names) -> String {
             s.line("ticks = 0L;");
         });
     });
+    s.finish()
+}
+
+/// `Dbg.java`, only in a debug export: the game's end of the editor's
+/// debugger.
+///
+/// The editor starts a debug run with `-Dstitchcraft.debug=<host:port>/<side>`;
+/// this class connects there the first time a block runs and speaks a
+/// line-based protocol over the socket:
+///
+/// | Direction | Line | Meaning |
+/// | --- | --- | --- |
+/// | game → editor | `hello <client\|server>` | which game this is |
+/// | game → editor | `at <id>` | block `<id>` ran (at most every 150 ms per block) |
+/// | game → editor | `paused <id> <json>` | stopped before `<id>`; the canvas's variables |
+/// | game → editor | `vars <json>` | the variables, when asked |
+/// | game → editor | `error <id> <message>` | a handler threw while on `<id>` |
+/// | editor → game | `breakpoints <id,id,...>` | the full breakpoint set |
+/// | editor → game | `continue` / `step` | resume; `step` stops again at the next block |
+/// | editor → game | `pause` | stop at the next block that runs |
+/// | editor → game | `vars` | send the variables |
+///
+/// Without the property, or when nothing is listening, every method returns
+/// at once and the mod runs as usual.
+pub fn dbg(names: &Names) -> String {
+    let mut s = Source::new();
+    s.line(format!("package {};", names.script_package()));
+    s.blank();
+    banner(
+        &mut s,
+        names,
+        "The game's end of the Stitchcraft debugger. Only debug exports have \
+         this file; the editor's Build button and Export leave it out.",
+    );
+    let body = r#"import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import @PACKAGE@.@MAIN@;
+
+public final class Dbg {
+    private static final String ADDRESS = System.getProperty("stitchcraft.debug", "");
+    private static final long QUIET_NANOS = 150_000_000L;
+    private static final ThreadLocal<String> CURRENT = new ThreadLocal<>();
+    private static final Set<String> BREAKPOINTS = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Long> LAST_SENT = new ConcurrentHashMap<>();
+    private static final Object PAUSE = new Object();
+    private static volatile PrintWriter out;
+    private static volatile boolean stepping;
+    private static boolean resumed;
+
+    static {
+        if (!ADDRESS.isEmpty()) connect();
+    }
+
+    private Dbg() {}
+
+    private static void connect() {
+        final int slash = ADDRESS.indexOf('/');
+        final String address = slash < 0 ? ADDRESS : ADDRESS.substring(0, slash);
+        final String side = slash < 0 ? side() : ADDRESS.substring(slash + 1);
+        final int colon = address.lastIndexOf(':');
+        try {
+            final Socket socket = new Socket(address.substring(0, colon), Integer.parseInt(address.substring(colon + 1)));
+            socket.setTcpNoDelay(true);
+            out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+            send("hello " + side);
+            // The editor answers a hello with the breakpoints. Taking that
+            // line here, before any block runs, means a breakpoint on the
+            // very first block is not missed.
+            final BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+            socket.setSoTimeout(2000);
+            try {
+                final String first = in.readLine();
+                if (first != null) handle(first);
+            } catch (java.net.SocketTimeoutException ignored) {
+                // An editor that says nothing still gets connected.
+            }
+            socket.setSoTimeout(0);
+            final Thread reader = new Thread(() -> read(socket, in), "Stitchcraft debugger");
+            reader.setDaemon(true);
+            reader.start();
+            @MAIN@.LOGGER.info("Stitchcraft: connected to the editor's debugger at {}", address);
+        } catch (IOException | RuntimeException e) {
+            @MAIN@.LOGGER.warn("Stitchcraft: could not reach the editor's debugger at {}", address, e);
+        }
+    }
+
+    private static String side() {
+        try {
+            Class.forName("net.minecraft.client.Minecraft", false, Dbg.class.getClassLoader());
+            return "client";
+        } catch (ClassNotFoundException | LinkageError | RuntimeException e) {
+            // Fabric refuses client classes on a server with a RuntimeException.
+            return "server";
+        }
+    }
+
+    private static void handle(String line) {
+        final int space = line.indexOf(' ');
+        final String command = space < 0 ? line : line.substring(0, space);
+        final String argument = space < 0 ? "" : line.substring(space + 1);
+        switch (command) {
+            case "breakpoints" -> {
+                BREAKPOINTS.clear();
+                for (String id : argument.split(",")) if (!id.isBlank()) BREAKPOINTS.add(id.trim());
+            }
+            case "continue" -> resume(false);
+            case "step" -> resume(true);
+            case "pause" -> stepping = true;
+            case "vars" -> send("vars " + variables());
+            default -> {}
+        }
+    }
+
+    private static void read(Socket socket, BufferedReader in) {
+        try (socket; in) {
+            String line;
+            while ((line = in.readLine()) != null) handle(line);
+        } catch (IOException ignored) {
+            // The editor went away; carry on without it.
+        } finally {
+            out = null;
+            BREAKPOINTS.clear();
+            resume(false);
+        }
+    }
+
+    private static void resume(boolean step) {
+        synchronized (PAUSE) {
+            stepping = step;
+            resumed = true;
+            PAUSE.notifyAll();
+        }
+    }
+
+    private static void send(String line) {
+        final PrintWriter writer = out;
+        if (writer != null) writer.println(line.replace('\n', ' ').replace('\r', ' '));
+    }
+
+    private static String variables() {
+        // The canvas's state is written on the server thread; a snapshot taken
+        // mid-write is retried rather than locked against.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return Vars.debugJson();
+            } catch (RuntimeException e) {
+                Thread.onSpinWait();
+            }
+        }
+        return "{}";
+    }
+
+    /** Called before every block. */
+    public static void at(String id) {
+        if (out == null) return;
+        CURRENT.set(id);
+        final long now = System.nanoTime();
+        final Long last = LAST_SENT.get(id);
+        if (last == null || now - last > QUIET_NANOS) {
+            LAST_SENT.put(id, now);
+            send("at " + id);
+        }
+        if (stepping || BREAKPOINTS.contains(id)) pause(id);
+    }
+
+    private static void pause(String id) {
+        synchronized (PAUSE) {
+            stepping = false;
+            resumed = false;
+            send("paused " + id + " " + variables());
+            while (!resumed && out != null) {
+                try {
+                    PAUSE.wait(500L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Reports a handler's exception against the block it was on. */
+    public static void fail(Throwable failure) {
+        final String id = CURRENT.get();
+        @MAIN@.LOGGER.error("Stitchcraft: a block failed", failure);
+        String message = failure.getMessage();
+        message = failure.getClass().getSimpleName() + (message == null ? "" : ": " + message);
+        send("error " + (id == null ? "-" : id) + " " + message);
+    }
+}"#;
+    for line in body
+        .replace("@PACKAGE@", &names.package)
+        .replace("@MAIN@", &names.main_class)
+        .lines()
+    {
+        s.line(line);
+    }
     s.finish()
 }

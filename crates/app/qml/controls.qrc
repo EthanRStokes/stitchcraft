@@ -12,6 +12,9 @@
     <file alias="AtkinsonHyperlegibleNext-Bold.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Bold.ttf</file>
     <file alias="AtkinsonHyperlegibleNext-Italic.ttf">../../../res/fonts/AtkinsonHyperlegibleNext-Italic.ttf</file>
   </qresource>
+  <qresource prefix="/stitchcraft">
+    <file alias="HostIcons.js">Stitchcraft/HostIcons.js</file>
+  </qresource>
   <qresource prefix="/icons">
     <file alias="stitchcraft.png">../../../res/icons/stitchcraft.png</file>
   </qresource>

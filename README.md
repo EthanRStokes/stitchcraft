@@ -15,6 +15,7 @@ operation, and the Qt 6/QML components are the canvas itself.
 ```
 crates/blocks    the vocabulary — what a block can say about a mod
 crates/export    the compiler   — canvas in, Java + Gradle + resources out
+crates/devtools  the test bench — Java, Gradle runs, test games, debugger
 crates/app       the editor     — Qt 6/QML, on blockstitch's canvas
 ```
 
@@ -34,6 +35,18 @@ implementing `BlockKind`. That is `McBlock`, and it has three families:
 How each block *draws* is declared in Rust too (`catalog.rs`) rather than in
 QML, so a field renamed on the enum stops the build instead of quietly drawing
 an empty slot. The tests check every row against the variant it builds.
+
+Declarations stay short: a fresh `register block` only asks for its id, name,
+material and hardness. Everything most mods leave at Minecraft's default
+(blast resistance, light, needing the right tool, drops, the item form, the
+creative tab; an item's stack size and rarity; a mob's health, speed, attack
+and spawn egg) is an optional part added from the block's **+** and removed
+with its **×**. A part that is off means the vanilla default.
+
+The palette files blocks by what they act on: **Registry**, **Events**,
+**World** (blocks, effects, time and weather, the server), **Players**
+(messages, and what you do to players and mobs), then blockstitch's own
+Flow, Data and Operators.
 
 ### Export
 
@@ -64,6 +77,29 @@ The exported project is a plain multiloader Gradle build: `common/` is a shared
 source directory that each loader adds to its own source sets, so it compiles
 twice, once against each loader's Minecraft. No Architectury, no vanilla-only
 jar to compile against.
+
+### Dev tools
+
+The toolbar builds and runs the mod without exporting anything by hand:
+
+- **Build jars** compiles ready-to-install Fabric and NeoForge jars; **Save jars…**
+  in the console copies them wherever you like.
+- **Run** starts a development client, a test server, or both, on Fabric or
+  NeoForge (the menu beside it picks). Servers run offline-mode on
+  `localhost`, so the client can join; the console takes server commands.
+  The first server asks you to agree to the Minecraft EULA.
+- **Debug** does the same with the debugger attached: blocks light up as they
+  run, right-click a block → **Toggle breakpoint** to pause before it, then
+  **Continue** (F8) or **Step** (F10), with the mod's variables, lists and dicts
+  shown live. A block that throws is marked on the canvas with the error.
+
+Each run works in its own Gradle project under the app's data folder
+(`~/.local/share/stitchcraft/workspaces/<mod id>` on Linux), rewritten only
+where the canvas changed, so Gradle's caches stay warm. Exported projects carry
+a Gradle wrapper, so neither path needs Gradle installed. Java is the one
+requirement: Stitchcraft uses a JDK 17+ from `JAVA_HOME` or `PATH`, or offers
+to download Eclipse Temurin 25 for its own use. Gradle itself fetches the JDK
+25 that Minecraft 26.3 builds need.
 
 ## Building
 
@@ -162,19 +198,11 @@ editor starts, loads its QML and renders with no runtime errors; the exporter
 produces a complete, deterministic tree whose Java files all balance their
 braces and whose JSON all parses.
 
-**Not verified: the generated Java has never been compiled against Minecraft.**
-There is no JDK 25 or Gradle on the machine this was built on, and FrozenLib
-3.0-mc26.3 targets a very new Minecraft where `ResourceLocation` is `Identifier`
-and `hurt` is `hurtServer`. The generated code is written against the API
-FrozenLib itself is built on — every signature was read out of the FrozenLib
-source rather than recalled — but *read* is not *compiled*. Expect to fix some
-signatures on the first `gradle build`, and expect them to be in `Rt.java`,
-which is exactly why everything funnels through it.
-
-Two things in the generated Gradle build are pinned on judgement rather than
-knowledge, and the exported `README.md` says so: the `fabric-loom` and
-`net.neoforged.moddev` plugin versions, and the coordinate FrozenLib is pulled
-from (`maven.modrinth:frozenlib`, with the FrozenBlock maven also configured).
+The generated Java is compiled against Minecraft 26.3 with FrozenLib 3.0.3:
+the example project builds jars on both loaders, and a test server starts on
+both with the debugger attached (breakpoints, stepping, variables). Clients
+have been built but not played, and nothing has been checked in a real world
+beyond the server starting.
 
 ## Known limits
 

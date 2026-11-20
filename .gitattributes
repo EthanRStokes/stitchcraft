@@ -4,3 +4,6 @@ justfile text eol=lf
 *.rb text eol=lf
 *.in text eol=lf
 *.desktop text eol=lf
+*.bat text eol=crlf
+res/gradle-wrapper/gradlew text eol=lf
+*.jar binary

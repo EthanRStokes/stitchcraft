@@ -12,8 +12,11 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
 /// The dependency versions the generated Gradle build pins. The defaults track
-/// FrozenLib 3.0-mc26.3, which is what `stitchcraft-export` was written
-/// against; a document saved against older ones keeps its own.
+/// FrozenLib 3.0.3 on Minecraft 26.3, which is what `stitchcraft-export` was
+/// written against; a document saved against other ones keeps its own.
+///
+/// `frozenlib_version` is the Modrinth file version without its loader
+/// suffix (`3.0.3-mc26.3`); each loader's build adds `-fabric` or `-neoforge`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BuildTargets {
     pub minecraft_version: String,
@@ -29,11 +32,25 @@ impl Default for BuildTargets {
         Self {
             minecraft_version: "26.3".to_string(),
             java_version: 25,
-            frozenlib_version: "3.0-mc26.3".to_string(),
-            fabric_loader_version: "0.19.5".to_string(),
-            fabric_api_version: "0.161.0+26.3".to_string(),
-            neoforge_version: "26.3.0.7-beta".to_string(),
+            frozenlib_version: "3.0.3-mc26.3".to_string(),
+            fabric_loader_version: "0.20.1".to_string(),
+            fabric_api_version: "0.166.2+26.3".to_string(),
+            neoforge_version: "26.3.0.113".to_string(),
         }
+    }
+}
+
+impl BuildTargets {
+    /// The defaults earlier versions of Stitchcraft wrote. They named versions
+    /// that never resolved (a FrozenLib file without its loader suffix, a
+    /// NeoForge beta that was never published), so a document still holding
+    /// exactly these is moved to the current defaults on load.
+    fn is_old_default(&self) -> bool {
+        self.minecraft_version == "26.3"
+            && self.frozenlib_version == "3.0-mc26.3"
+            && self.fabric_loader_version == "0.19.5"
+            && self.fabric_api_version == "0.161.0+26.3"
+            && self.neoforge_version == "26.3.0.7-beta"
     }
 }
 
@@ -114,9 +131,14 @@ impl ModProject {
         title_case(&self.mod_id).replace(' ', "")
     }
 
-    /// One-time repairs after loading a save: legacy boolean slots and any
-    /// hand-edited block color.
+    /// One-time repairs after loading a save: blocks in an older shape,
+    /// legacy boolean slots and any hand-edited block color.
     pub fn migrate_after_load(&mut self) {
+        if self.targets.is_old_default() {
+            self.targets = BuildTargets::default();
+        }
+        self.graph
+            .walk_instructions_mut(&mut |instruction| instruction.kind.migrate_legacy());
         self.graph.migrate_bool_slots();
         self.graph.normalize_block_colors();
     }
@@ -183,6 +205,7 @@ mod tests {
     use super::*;
     use crate::block::McBlock;
     use blockstitch_core::graph::Instruction;
+    use blockstitch_core::value::Value;
 
     #[test]
     fn mod_ids_are_reduced_to_legal_characters() {
@@ -209,8 +232,7 @@ mod tests {
         let json = serde_json::to_value(&project).unwrap();
         assert_eq!(json["mod_id"], "demo");
         assert_eq!(
-            json["strands"][0]["instructions"][0]["kind"]["type"],
-            "OnServerTick",
+            json["strands"][0]["instructions"][0]["kind"]["type"], "OnServerTick",
             "strands sit beside the metadata, not under a `graph` key"
         );
 
@@ -223,5 +245,51 @@ mod tests {
         let mut project = ModProject::new("demo");
         project.create_variable("score").unwrap();
         assert_eq!(project.variables.len(), 1);
+    }
+
+    #[test]
+    fn older_blocks_are_brought_up_to_date_on_load() {
+        let mut project = ModProject::new("demo");
+        project.graph.add_strand(0, 0, vec![Instruction::new(McBlock::OnPlayerJoin)]);
+        let mut json = serde_json::to_value(&project).unwrap();
+        // How an earlier Stitchcraft saved an effect and two declarations.
+        let old = serde_json::json!([
+            { "id": "a", "kind": { "type": "AddEffect", "target": "EventPlayer",
+              "effect": "minecraft:speed", "seconds": { "kind": "Number", "value": 10.0 },
+              "amplifier": { "kind": "Number", "value": 0.0 } } },
+        ]);
+        json["strands"][0]["instructions"]
+            .as_array_mut()
+            .unwrap()
+            .extend(old.as_array().unwrap().iter().cloned());
+        json["strands"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": "decl", "x": 0, "y": 200, "instructions": [
+                { "id": "b", "kind": { "type": "RegisterItem", "item_id": "gem",
+                  "display_name": "Gem", "max_stack": { "kind": "Number", "value": 64.0 },
+                  "rarity": "Common", "creative_tab": "" } },
+            ]
+        }));
+        let mut loaded: ModProject = serde_json::from_value(json).unwrap();
+        loaded.migrate_after_load();
+
+        let effect = &loaded.strands[0].instructions[1].kind;
+        let McBlock::AddEffect {
+            level, amplifier, ..
+        } = effect
+        else {
+            panic!("{effect:?}");
+        };
+        assert_eq!(*level, Value::number(1.0), "amplifier 0 is level I");
+        assert!(amplifier.is_none());
+        let saved = serde_json::to_value(effect).unwrap();
+        assert!(saved.get("amplifier").is_none(), "the old key isn't written back");
+
+        let McBlock::RegisterItem {
+            max_stack, rarity, ..
+        } = &loaded.strands[1].instructions[0].kind
+        else {
+            panic!();
+        };
+        assert_eq!((max_stack, rarity), (&None, &None), "defaults become parts left off");
     }
 }

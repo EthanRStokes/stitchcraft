@@ -119,6 +119,10 @@ fn pack_mcmeta(project: &ModProject) -> String {
             "description": format!("{} resources", project.name),
             "pack_format": 64,
             "supported_formats": { "min_inclusive": 1, "max_inclusive": 999 },
+            // Minecraft 1.21.9+ reads these instead; both are kept so older
+            // versions still load the pack.
+            "min_format": 1,
+            "max_format": 999,
         }
     }))
 }

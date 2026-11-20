@@ -52,7 +52,7 @@ fn main() {
         // name. Everything else resolves by type name through the module's
         // `qmldir`; only this one entry point is addressed by URL.
         engine.pin_mut().load(&QUrl::from(
-            "qrc:/qt/qml/com/blockworked/Stitchcraft/qml/Stitchcraft/Main.qml",
+            "qrc:/qt/qml/com/blockworked/Stitchcraft/qml/Stitchcraft/Start.qml",
         ));
     }
 

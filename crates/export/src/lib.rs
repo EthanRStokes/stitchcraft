@@ -69,6 +69,9 @@ use stitchcraft_blocks::{ModProject, Report, validate};
 #[derive(Debug, Clone, Default)]
 pub struct Bundle {
     pub files: BTreeMap<String, String>,
+    /// Files that are not text: the Gradle wrapper's jar. Kept apart so
+    /// `files` stays diffable and hashable as strings.
+    pub binaries: BTreeMap<String, &'static [u8]>,
     /// Everything worth saying about the export: the document's own warnings,
     /// plus the ones only the exporter can see.
     pub warnings: Vec<String>,
@@ -84,6 +87,16 @@ impl Bundle {
     pub fn write_to(&self, root: impl AsRef<Path>) -> io::Result<()> {
         let root = root.as_ref();
         for (path, contents) in &self.files {
+            let target = root.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, contents)?;
+            if gradle::is_executable(path) {
+                make_executable(&target)?;
+            }
+        }
+        for (path, contents) in &self.binaries {
             let target = root.join(path);
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -109,8 +122,27 @@ impl Bundle {
 
     /// Total size of the export, for the summary the app shows.
     pub fn byte_count(&self) -> usize {
-        self.files.values().map(String::len).sum()
+        self.files.values().map(String::len).sum::<usize>()
+            + self.binaries.values().map(|b| b.len()).sum::<usize>()
     }
+
+    /// Every path the export writes, text and binary.
+    pub fn paths(&self) -> impl Iterator<Item = &String> {
+        self.files.keys().chain(self.binaries.keys())
+    }
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(permissions.mode() | 0o111);
+    std::fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 fn collect(
@@ -135,9 +167,26 @@ fn collect(
     }
 }
 
+/// How to compile. The default is what Export and Build produce.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Instruments every block for the editor's debugger: each statement is
+    /// preceded by a `Dbg.at("<instruction id>")` call, and each handler
+    /// reports an exception against the block it happened in instead of
+    /// letting it reach the game. `Dbg` stays idle unless the game was
+    /// started with `-Dstitchcraft.debug=<host:port>`, which only the
+    /// editor's Debug runs pass.
+    pub debug: bool,
+}
+
 /// Compiles `project`. Returns the document's [`Report`] unchanged when it has
 /// errors, so the caller can show the same diagnostics the editor does.
 pub fn export(project: &ModProject) -> Result<Bundle, Report> {
+    export_with(project, Options::default())
+}
+
+/// [`export`], with [`Options`].
+pub fn export_with(project: &ModProject, options: Options) -> Result<Bundle, Report> {
     let report = validate::check(project);
     if report.has_errors() {
         return Err(report);
@@ -161,9 +210,12 @@ pub fn export(project: &ModProject) -> Result<Bundle, Report> {
     for (path, contents) in runtime::files(&names) {
         add(path, contents);
     }
+    if options.debug {
+        add(names.common("script/Dbg.java"), runtime::dbg(&names));
+    }
     add(
         names.common("script/Handlers.java"),
-        handlers::handlers_java(project, &names),
+        handlers::handlers_java(project, &names, options.debug),
     );
     add(
         names.common("script/Hooks.java"),
@@ -243,7 +295,11 @@ pub fn export(project: &ModProject) -> Result<Bundle, Report> {
         );
     }
 
-    Ok(Bundle { files, warnings })
+    Ok(Bundle {
+        files,
+        binaries: gradle::binaries(),
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -274,8 +330,8 @@ mod tests {
                 display_name: "Chime Block".into(),
                 material: MaterialPreset::Metal,
                 hardness: Value::number(2.0),
-                resistance: Value::number(4.0),
-                light: Value::number(7.0),
+                resistance: Some(Value::number(4.0)),
+                light: Some(Value::number(7.0)),
                 requires_tool: true,
                 drops_self: true,
                 give_item: true,
@@ -498,9 +554,9 @@ mod tests {
                             category,
                             width: Value::number(0.5),
                             height: Value::number(0.5),
-                            max_health: Value::number(6.0),
-                            movement_speed: Value::number(0.3),
-                            attack_damage: Value::number(1.0),
+                            max_health: Some(Value::number(6.0)),
+                            movement_speed: Some(Value::number(0.3)),
+                            attack_damage: Some(Value::number(1.0)),
                             spawn_egg: false,
                         },
                         other => other,
@@ -511,10 +567,12 @@ mod tests {
         let bundle = export(&project).expect("valid");
         let entities = file(&bundle, "registry/ModEntities.java");
         assert!(entities.contains("DeferredEntityType<PassiveMob> WISP"));
-        assert!(entities.contains("DefaultAttributeRegistry.register(WISP.get(), PassiveMob.attributes(6.0D, 0.3D, 1.0D));"));
+        assert!(entities.contains("sink.accept(WISP.get(), PassiveMob.attributes(6.0D, 0.3D, 1.0D).build());"));
         assert!(file(&bundle, "content/PassiveMob.java").contains("extends ScriptedMob"));
         assert!(file(&bundle, "content/ModRenderers.java").contains("NoopRenderer::new"));
-        assert!(file(&bundle, "Demo.java").contains("ModEntities.registerAttributes();"));
+        // Each loader registers attributes once the types are bound.
+        assert!(file(&bundle, "DemoFabric.java").contains("ModEntities.registerAttributes(DefaultAttributeRegistry::register);"));
+        assert!(file(&bundle, "DemoNeoForge.java").contains("EntityAttributeCreationEvent.class, event -> ModEntities.registerAttributes(event::put)"));
     }
 
     #[test]

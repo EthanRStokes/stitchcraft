@@ -21,7 +21,7 @@ use crate::kinds::{
     EntityBase, MaterialPreset, MessageKind, MobCategoryKind, Rarity, Target, Weather,
 };
 use blockstitch_core::graph::{BlockDef, BlockKind, InputValueType, Instruction, RefKind};
-use blockstitch_core::value::Value;
+use blockstitch_core::value::{Op, Value};
 use serde::{Deserialize, Serialize};
 
 /// Shorthand for a nested instruction list, which is most of what the
@@ -42,18 +42,34 @@ pub enum McBlock {
         display_name: String,
         material: MaterialPreset,
         hardness: Value,
-        resistance: Value,
-        light: Value,
+        // The rest are the block's optional parts, added from its "+": a
+        // missing one means the Minecraft default.
+        /// Defaults to the hardness, like vanilla's `strength(hardness)`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resistance: Option<Value>,
+        /// Light level 0-15; no light without it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        light: Option<Value>,
+        #[serde(default)]
         requires_tool: bool,
+        #[serde(default = "yes")]
         drops_self: bool,
+        #[serde(default = "yes")]
         give_item: bool,
+        /// A declared tab's id, or empty for none.
+        #[serde(default)]
         creative_tab: String,
     },
     RegisterItem {
         item_id: String,
         display_name: String,
-        max_stack: Value,
-        rarity: Rarity,
+        /// Defaults to 64.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_stack: Option<Value>,
+        /// Defaults to common.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rarity: Option<Rarity>,
+        #[serde(default)]
         creative_tab: String,
     },
     /// An entity type plus the generated mob class its `base` names.
@@ -64,9 +80,16 @@ pub enum McBlock {
         category: MobCategoryKind,
         width: Value,
         height: Value,
-        max_health: Value,
-        movement_speed: Value,
-        attack_damage: Value,
+        /// Defaults to 10 (five hearts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_health: Option<Value>,
+        /// Defaults to 0.25.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        movement_speed: Option<Value>,
+        /// Defaults to 2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attack_damage: Option<Value>,
+        #[serde(default)]
         spawn_egg: bool,
     },
     RegisterSound {
@@ -183,7 +206,13 @@ pub enum McBlock {
         target: Target,
         effect: String,
         seconds: Value,
-        amplifier: Value,
+        /// 1 for level I, the way the game names effects.
+        #[serde(default = "level_one")]
+        level: Value,
+        /// The 0-based amplifier older documents stored instead of `level`;
+        /// `ModProject::migrate_after_load` turns it into a level.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        amplifier: Option<Value>,
     },
     TeleportTarget {
         target: Target,
@@ -298,6 +327,41 @@ pub enum McBlock {
     },
 }
 
+/// A field that holds a value slot: a plain [`Value`], or an optional part's
+/// `Option<Value>`, which has a slot only while the part is on.
+trait Slot {
+    fn each(&mut self, f: &mut dyn FnMut(&mut Value));
+    fn slot(&mut self) -> Option<&mut Value>;
+}
+
+impl Slot for Value {
+    fn each(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        f(self)
+    }
+    fn slot(&mut self) -> Option<&mut Value> {
+        Some(self)
+    }
+}
+
+impl Slot for Option<Value> {
+    fn each(&mut self, f: &mut dyn FnMut(&mut Value)) {
+        if let Some(value) = self {
+            f(value)
+        }
+    }
+    fn slot(&mut self) -> Option<&mut Value> {
+        self.as_mut()
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn level_one() -> Value {
+    Value::number(1.0)
+}
+
 /// `Any` unless a field is written `name: Bool` in the table below.
 macro_rules! slot_type {
     () => {
@@ -318,7 +382,7 @@ macro_rules! value_fields {
         fn walk_own_values(&mut self, f: &mut dyn FnMut(&mut Value, InputValueType)) {
             match self {
                 $( McBlock::$variant { $( $field, )+ .. } => {
-                    $( f($field, slot_type!($($ty)?)); )+
+                    $( Slot::each($field, &mut |value| f(value, slot_type!($($ty)?))); )+
                 } )+
                 McBlock::CallBlock { args, .. } => {
                     // Declared types live on the BlockDef, not here; a call
@@ -334,7 +398,7 @@ macro_rules! value_fields {
         fn own_slot_mut(&mut self, field: &str) -> Option<&mut Value> {
             match self {
                 $( McBlock::$variant { $( $field, )+ .. } => match field {
-                    $( stringify!($field) => Some($field), )+
+                    $( stringify!($field) => Slot::slot($field), )+
                     _ => None,
                 } )+
                 McBlock::CallBlock { args, .. } => args.get_mut(arg_index(field)?),
@@ -371,7 +435,7 @@ const INTEGER_FIELDS: &[&str] = &[
     "light",
     "max_stack",
     "count",
-    "amplifier",
+    "level",
     "index",
     "ticks",
     "time",
@@ -395,7 +459,7 @@ impl McBlock {
         SpawnParticleAt { x, y, z, count }
         DamageTarget { amount }
         HealTarget { amount }
-        AddEffect { seconds, amplifier }
+        AddEffect { seconds, level }
         TeleportTarget { x, y, z }
         PushTarget { x, y, z }
         ExplodeAt { x, y, z, power }
@@ -415,6 +479,41 @@ impl McBlock {
         While { condition: Bool }
         ScheduleAfter { ticks }
         Return { value }
+    }
+
+    /// Brings a block saved by an older Stitchcraft up to date: an effect's
+    /// 0-based amplifier becomes a level, and declaration settings that
+    /// only restated the default become optional parts left off.
+    pub fn migrate_legacy(&mut self) {
+        let is = |value: &Option<Value>, n: f64| matches!(value, Some(Value::Number { value }) if *value == n);
+        match self {
+            McBlock::AddEffect {
+                level, amplifier, ..
+            } => {
+                if let Some(old) = amplifier.take() {
+                    *level = match old {
+                        Value::Number { value } => Value::number(value + 1.0),
+                        other => Value::op(Op::Add, vec![other, Value::number(1.0)]),
+                    };
+                }
+            }
+            McBlock::RegisterBlock { light, .. } => {
+                if is(light, 0.0) {
+                    *light = None;
+                }
+            }
+            McBlock::RegisterItem {
+                max_stack, rarity, ..
+            } => {
+                if is(max_stack, 64.0) {
+                    *max_stack = None;
+                }
+                if *rarity == Some(Rarity::Common) {
+                    *rarity = None;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The field a slot id names. blockstitch draws `If`, `IfElse`, `While`

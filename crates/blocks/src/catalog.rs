@@ -13,9 +13,7 @@
 //! [`Options::YesNo`] (a boolean field, which has no checkbox piece kind).
 
 use crate::block::McBlock;
-use crate::kinds::{
-    EntityBase, MaterialPreset, MessageKind, MobCategoryKind, Rarity, Target, Weather,
-};
+use crate::kinds::{EntityBase, MaterialPreset, MessageKind, MobCategoryKind, Target, Weather};
 use blockstitch_core::value::Value;
 use serde_json::{Map, json};
 
@@ -58,6 +56,8 @@ pub enum Piece {
         field: &'static str,
         /// True for a boolean slot, drawn as a hexagon.
         boolean: bool,
+        /// A small caption framing the slot ("x", "width"), or empty.
+        unit: &'static str,
     },
     Dropdown {
         key: &'static str,
@@ -93,6 +93,46 @@ pub struct Row {
     pub mouths: &'static [&'static str],
     /// Label drawn between one mouth and the next.
     pub separators: &'static [&'static str],
+    /// Optional parts the block's "+" adds after the head.
+    pub components: &'static [Component],
+}
+
+/// An optional part of a block: settings most mods leave at Minecraft's
+/// default, kept off the block until someone adds them from its "+". A part
+/// is on while the instruction holds `key` (see [`Present`]).
+pub struct Component {
+    pub key: &'static str,
+    /// What the "+" menu calls it.
+    pub label: &'static str,
+    pub icon: &'static str,
+    /// What `key` is set to when the part is added.
+    pub fresh: Fresh,
+    pub present: Present,
+    pub pieces: &'static [Piece],
+}
+
+/// A part's starting value.
+#[derive(Debug, Clone, Copy)]
+pub enum Fresh {
+    /// A number value slot.
+    Number(f64),
+    Bool(bool),
+    /// A fixed dropdown choice (a serde variant name).
+    Choice(&'static str),
+    /// The first choice of a dynamic source (see [`DYNAMIC_SOURCES`]).
+    Source(&'static str),
+}
+
+/// When a part counts as on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Present {
+    /// While `key` is set at all - an `Option` field.
+    Set,
+    /// While a boolean `key` holds this. Taking the part off deletes the key,
+    /// which reads back as the field's serde default: the other value.
+    Is(bool),
+    /// While a text `key` is not empty.
+    NonEmpty,
 }
 
 /// A palette section: the category it files under, a heading, and the
@@ -113,8 +153,8 @@ pub struct Category {
     pub after: &'static str,
 }
 
-/// The categories Stitchcraft adds: what a mod declares, and what it does to
-/// the world.
+/// The categories Stitchcraft adds: what a mod declares, what it does to the
+/// world, and what it does to players and mobs.
 pub const PALETTE_CATEGORIES: &[Category] = &[
     Category {
         id: "registry",
@@ -128,12 +168,25 @@ pub const PALETTE_CATEGORIES: &[Category] = &[
         icon: "globe",
         after: "events",
     },
+    Category {
+        id: "players",
+        name: "Players",
+        icon: "users",
+        after: "world",
+    },
 ];
 
 /// Types blockstitch draws itself (control blocks, custom block headers and
 /// calls). They keep a prefab, but get no row: a host row would replace
 /// blockstitch's own drawing of them.
-pub const SELF_DRAWN: &[&str] = &["If", "IfElse", "Repeat", "While", "BlockHeader", "CallBlock"];
+pub const SELF_DRAWN: &[&str] = &[
+    "If",
+    "IfElse",
+    "Repeat",
+    "While",
+    "BlockHeader",
+    "CallBlock",
+];
 
 // ── Fixed dropdown tables ─────────────────────────────────────────────────
 // The `value` in each pair is the serde name of the matching variant in
@@ -180,11 +233,7 @@ const ENTITY_BASES: &[(&str, &str)] = &[
     ("Flying", "flying"),
 ];
 
-const WEATHERS: &[(&str, &str)] = &[
-    ("Clear", "clear"),
-    ("Rain", "rain"),
-    ("Thunder", "thunder"),
-];
+const WEATHERS: &[(&str, &str)] = &[("Clear", "clear"), ("Rain", "rain"), ("Thunder", "thunder")];
 
 // ── Row shorthands ────────────────────────────────────────────────────────
 
@@ -196,6 +245,18 @@ const fn slot(field: &'static str) -> Piece {
     Piece::Slot {
         field,
         boolean: false,
+        unit: "",
+    }
+}
+
+/// A slot framed by a caption, for numbers whose meaning the label alone
+/// leaves open: coordinates and sizes. Units of time read better as a label
+/// after the slot ("after 20 ticks").
+const fn unit_slot(field: &'static str, unit: &'static str) -> Piece {
+    Piece::Slot {
+        field,
+        boolean: false,
+        unit,
     }
 }
 
@@ -203,18 +264,20 @@ const fn boolean_slot(field: &'static str) -> Piece {
     Piece::Slot {
         field,
         boolean: true,
+        unit: "",
     }
 }
+
+/// The three slots of a block position, captioned x, y and z.
+const X: Piece = unit_slot("x", "x");
+const Y: Piece = unit_slot("y", "y");
+const Z: Piece = unit_slot("z", "z");
 
 const fn text(key: &'static str, placeholder: &'static str) -> Piece {
     Piece::Text { key, placeholder }
 }
 
-const fn choose(
-    key: &'static str,
-    options: Options,
-    placeholder: &'static str,
-) -> Piece {
+const fn choose(key: &'static str, options: Options, placeholder: &'static str) -> Piece {
     Piece::Dropdown {
         key,
         options,
@@ -238,6 +301,7 @@ const fn row(kind: &'static str, icon: &'static str, head: &'static [Piece]) -> 
         head,
         mouths: &[],
         separators: &[],
+        components: &[],
     }
 }
 
@@ -249,6 +313,7 @@ const fn header(kind: &'static str, icon: &'static str, head: &'static [Piece]) 
         head,
         mouths: &[],
         separators: &[],
+        components: &[],
     }
 }
 
@@ -260,9 +325,56 @@ const fn cap(kind: &'static str, icon: &'static str, head: &'static [Piece]) -> 
         head,
         mouths: &[],
         separators: &[],
+        components: &[],
     }
 }
 
+/// A header with optional parts.
+const fn declaration(
+    kind: &'static str,
+    icon: &'static str,
+    head: &'static [Piece],
+    components: &'static [Component],
+) -> Row {
+    Row {
+        kind,
+        icon,
+        shape: Shape::Header,
+        head,
+        mouths: &[],
+        separators: &[],
+        components,
+    }
+}
+const fn part(
+    key: &'static str,
+    label: &'static str,
+    icon: &'static str,
+    fresh: Fresh,
+    present: Present,
+    pieces: &'static [Piece],
+) -> Component {
+    Component {
+        key,
+        label,
+        icon,
+        fresh,
+        present,
+        pieces,
+    }
+}
+/// The "in tab" part every item-bearing declaration shares.
+const TAB_PART: Component = part(
+    "creative_tab",
+    "creative tab",
+    "layout-grid",
+    Fresh::Source("declaredTabs"),
+    Present::NonEmpty,
+    &[
+        label("in tab"),
+        choose("creative_tab", Options::Source("declaredTabs"), "main"),
+    ],
+);
 const fn wrap(
     kind: &'static str,
     icon: &'static str,
@@ -277,13 +389,14 @@ const fn wrap(
         head,
         mouths,
         separators,
+        components: &[],
     }
 }
 
 /// Every instruction type's row. One entry per [`McBlock`] variant.
 pub const ROWS: &[Row] = &[
     // ── Declarations ──────────────────────────────────────────────────────
-    header(
+    declaration(
         "RegisterBlock",
         "box",
         &[
@@ -295,21 +408,52 @@ pub const ROWS: &[Row] = &[
             choose("material", Options::Fixed(MATERIALS), "stone"),
             label("hardness"),
             slot("hardness"),
-            label("blast resistance"),
-            slot("resistance"),
-            label("light"),
-            slot("light"),
-            label("needs a tool"),
-            yes_no("requires_tool"),
-            label("drops itself"),
-            yes_no("drops_self"),
-            label("give an item"),
-            yes_no("give_item"),
-            label("in tab"),
-            choose("creative_tab", Options::Source("declaredTabs"), "main"),
+        ],
+        &[
+            part(
+                "resistance",
+                "blast resistance",
+                "shield",
+                Fresh::Number(6.0),
+                Present::Set,
+                &[label("blast resistance"), slot("resistance")],
+            ),
+            part(
+                "light",
+                "light",
+                "sun",
+                Fresh::Number(15.0),
+                Present::Set,
+                &[label("gives light"), slot("light")],
+            ),
+            part(
+                "requires_tool",
+                "needs the right tool",
+                "pickaxe",
+                Fresh::Bool(true),
+                Present::Is(true),
+                &[label("needs the right tool")],
+            ),
+            part(
+                "drops_self",
+                "drops nothing",
+                "circle-off",
+                Fresh::Bool(false),
+                Present::Is(false),
+                &[label("drops nothing")],
+            ),
+            part(
+                "give_item",
+                "no item",
+                "package-x",
+                Fresh::Bool(false),
+                Present::Is(false),
+                &[label("no item")],
+            ),
+            TAB_PART,
         ],
     ),
-    header(
+    declaration(
         "RegisterItem",
         "package",
         &[
@@ -317,15 +461,31 @@ pub const ROWS: &[Row] = &[
             text("item_id", "item id"),
             label("named"),
             text("display_name", "Display Name"),
-            label("stacks to"),
-            slot("max_stack"),
-            label("rarity"),
-            choose("rarity", Options::Fixed(RARITIES), "common"),
-            label("in tab"),
-            choose("creative_tab", Options::Source("declaredTabs"), "main"),
+        ],
+        &[
+            part(
+                "max_stack",
+                "stack size",
+                "layers",
+                Fresh::Number(16.0),
+                Present::Set,
+                &[label("stacks to"), slot("max_stack")],
+            ),
+            part(
+                "rarity",
+                "rarity",
+                "gem",
+                Fresh::Choice("Uncommon"),
+                Present::Set,
+                &[
+                    label("rarity"),
+                    choose("rarity", Options::Fixed(RARITIES), "common"),
+                ],
+            ),
+            TAB_PART,
         ],
     ),
-    header(
+    declaration(
         "RegisterEntity",
         "ghost",
         &[
@@ -336,18 +496,42 @@ pub const ROWS: &[Row] = &[
             label("as a"),
             choose("base", Options::Fixed(ENTITY_BASES), "passive"),
             choose("category", Options::Fixed(CATEGORIES), "creature"),
-            label("size"),
-            slot("width"),
-            label("x"),
-            slot("height"),
-            label("health"),
-            slot("max_health"),
-            label("speed"),
-            slot("movement_speed"),
-            label("attack"),
-            slot("attack_damage"),
-            label("spawn egg"),
-            yes_no("spawn_egg"),
+            unit_slot("width", "width"),
+            unit_slot("height", "height"),
+        ],
+        &[
+            part(
+                "max_health",
+                "health",
+                "heart",
+                Fresh::Number(20.0),
+                Present::Set,
+                &[label("health"), slot("max_health")],
+            ),
+            part(
+                "movement_speed",
+                "speed",
+                "footprints",
+                Fresh::Number(0.25),
+                Present::Set,
+                &[label("speed"), slot("movement_speed")],
+            ),
+            part(
+                "attack_damage",
+                "attack damage",
+                "swords",
+                Fresh::Number(3.0),
+                Present::Set,
+                &[label("attack"), slot("attack_damage")],
+            ),
+            part(
+                "spawn_egg",
+                "spawn egg",
+                "egg",
+                Fresh::Bool(true),
+                Present::Is(true),
+                &[label("with a spawn egg")],
+            ),
         ],
     ),
     header(
@@ -375,8 +559,16 @@ pub const ROWS: &[Row] = &[
     // ── Event hooks ───────────────────────────────────────────────────────
     header("OnModInit", "play", &[label("when the mod loads")]),
     header("OnClientInit", "monitor", &[label("when the client loads")]),
-    header("OnServerStarted", "boxes", &[label("when the server starts")]),
-    header("OnServerStopping", "monitor-x", &[label("when the server stops")]),
+    header(
+        "OnServerStarted",
+        "boxes",
+        &[label("when the server starts")],
+    ),
+    header(
+        "OnServerStopping",
+        "monitor-x",
+        &[label("when the server stops")],
+    ),
     header("OnServerTick", "clock", &[label("every server tick")]),
     header("OnLevelTick", "layers", &[label("every level tick")]),
     header("OnPlayerJoin", "user", &[label("when a player joins")]),
@@ -431,10 +623,18 @@ pub const ROWS: &[Row] = &[
         "zap",
         &[
             label("every tick of"),
-            choose("entity_id", Options::Source("declaredEntities"), "an entity"),
+            choose(
+                "entity_id",
+                Options::Source("declaredEntities"),
+                "an entity",
+            ),
         ],
     ),
-    header("OnEntityHurt", "triangle-alert", &[label("when an entity is hurt")]),
+    header(
+        "OnEntityHurt",
+        "triangle-alert",
+        &[label("when an entity is hurt")],
+    ),
     header("OnEntityDeath", "ghost", &[label("when an entity dies")]),
     header(
         "OnCommand",
@@ -460,15 +660,19 @@ pub const ROWS: &[Row] = &[
     ),
     row("Broadcast", "volume-2", &[label("announce"), slot("text")]),
     row("LogInfo", "file-text", &[label("log"), slot("text")]),
-    row("RunCommand", "terminal", &[label("run command"), slot("command")]),
+    row(
+        "RunCommand",
+        "terminal",
+        &[label("run command"), slot("command")],
+    ),
     row(
         "SetBlockAt",
         "layers",
         &[
             label("set block at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
             label("to"),
             text("block", "minecraft:stone"),
         ],
@@ -478,9 +682,9 @@ pub const ROWS: &[Row] = &[
         "hammer",
         &[
             label("break block at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
             label("dropping items"),
             yes_no("drop"),
         ],
@@ -492,9 +696,9 @@ pub const ROWS: &[Row] = &[
             label("spawn"),
             text("entity", "minecraft:pig"),
             label("at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
         ],
     ),
     row(
@@ -502,10 +706,10 @@ pub const ROWS: &[Row] = &[
         "package",
         &[
             label("give"),
-            choose("target", Options::Fixed(TARGETS), "the event player"),
             slot("count"),
-            label("x"),
             text("item", "minecraft:diamond"),
+            label("to"),
+            choose("target", Options::Fixed(TARGETS), "the event player"),
         ],
     ),
     row(
@@ -515,9 +719,9 @@ pub const ROWS: &[Row] = &[
             label("play sound"),
             text("sound", "minecraft:entity.player.levelup"),
             label("at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
             label("volume"),
             slot("volume"),
             label("pitch"),
@@ -532,9 +736,9 @@ pub const ROWS: &[Row] = &[
             slot("count"),
             text("particle", "minecraft:flame"),
             label("at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
         ],
     ),
     row(
@@ -564,10 +768,11 @@ pub const ROWS: &[Row] = &[
             label("give"),
             choose("target", Options::Fixed(TARGETS), "the event player"),
             text("effect", "minecraft:speed"),
+            label("level"),
+            slot("level"),
             label("for"),
             slot("seconds"),
-            label("seconds at level"),
-            slot("amplifier"),
+            label("seconds"),
         ],
     ),
     row(
@@ -577,9 +782,9 @@ pub const ROWS: &[Row] = &[
             label("teleport"),
             choose("target", Options::Fixed(TARGETS), "the event player"),
             label("to"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
         ],
     ),
     row(
@@ -589,9 +794,9 @@ pub const ROWS: &[Row] = &[
             label("push"),
             choose("target", Options::Fixed(TARGETS), "the event player"),
             label("by"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
         ],
     ),
     row(
@@ -599,16 +804,20 @@ pub const ROWS: &[Row] = &[
         "zap",
         &[
             label("explode at"),
-            slot("x"),
-            slot("y"),
-            slot("z"),
+            X,
+            Y,
+            Z,
             label("with power"),
             slot("power"),
             label("setting fires"),
             yes_no("fire"),
         ],
     ),
-    row("SetTimeOfDay", "sun", &[label("set time of day to"), slot("time")]),
+    row(
+        "SetTimeOfDay",
+        "sun",
+        &[label("set time of day to"), slot("time"), label("ticks")],
+    ),
     row(
         "SetWeather",
         "cloud",
@@ -836,11 +1045,6 @@ pub const SECTIONS: &[Section] = &[
     },
     Section {
         category: "world",
-        title: "Messages",
-        items: &["Message", "Broadcast", "LogInfo", "RunCommand"],
-    },
-    Section {
-        category: "world",
         title: "Blocks",
         items: &[
             "SetBlockAt",
@@ -853,21 +1057,13 @@ pub const SECTIONS: &[Section] = &[
     },
     Section {
         category: "world",
-        title: "Players and mobs",
+        title: "Effects",
         items: &[
-            "GiveItem",
-            "DamageTarget",
-            "HealTarget",
-            "AddEffect",
-            "TeleportTarget",
-            "PushTarget",
+            "PlaySoundAt",
+            "SpawnParticleAt",
+            "ExplodeAt",
             "SpawnEntityAt",
         ],
-    },
-    Section {
-        category: "world",
-        title: "Effects",
-        items: &["PlaySoundAt", "SpawnParticleAt", "ExplodeAt"],
     },
     Section {
         category: "world",
@@ -885,6 +1081,8 @@ pub const SECTIONS: &[Section] = &[
         category: "world",
         title: "Server",
         items: &[
+            "LogInfo",
+            "RunCommand",
             "PlayerCount",
             "ServerTickCount",
             "Difficulty",
@@ -895,6 +1093,24 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        category: "players",
+        title: "Messages",
+        items: &["Message", "Broadcast"],
+    },
+    Section {
+        category: "players",
+        title: "Players and mobs",
+        items: &[
+            "ForEachPlayer",
+            "GiveItem",
+            "DamageTarget",
+            "HealTarget",
+            "AddEffect",
+            "TeleportTarget",
+            "PushTarget",
+        ],
+    },
+    Section {
         category: "control",
         title: "",
         items: &[
@@ -902,7 +1118,6 @@ pub const SECTIONS: &[Section] = &[
             "IfElse",
             "Repeat",
             "While",
-            "ForEachPlayer",
             "ScheduleAfter",
             "EscapeLoop",
             "ContinueLoop",
@@ -944,9 +1159,9 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
             display_name: String::new(),
             material: MaterialPreset::Stone,
             hardness: number(1.5),
-            resistance: number(6.0),
-            light: number(0.0),
-            requires_tool: true,
+            resistance: None,
+            light: None,
+            requires_tool: false,
             drops_self: true,
             give_item: true,
             creative_tab: String::new(),
@@ -954,8 +1169,8 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
         "RegisterItem" => McBlock::RegisterItem {
             item_id: String::new(),
             display_name: String::new(),
-            max_stack: number(64.0),
-            rarity: Rarity::Common,
+            max_stack: None,
+            rarity: None,
             creative_tab: String::new(),
         },
         "RegisterEntity" => McBlock::RegisterEntity {
@@ -965,9 +1180,9 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
             category: MobCategoryKind::Creature,
             width: number(0.8),
             height: number(1.4),
-            max_health: number(10.0),
-            movement_speed: number(0.25),
-            attack_damage: number(2.0),
+            max_health: None,
+            movement_speed: None,
+            attack_damage: None,
             spawn_egg: true,
         },
         "RegisterSound" => McBlock::RegisterSound {
@@ -1026,9 +1241,7 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
         "Broadcast" => McBlock::Broadcast {
             text: text("Hello, everyone!"),
         },
-        "LogInfo" => McBlock::LogInfo {
-            text: text("here"),
-        },
+        "LogInfo" => McBlock::LogInfo { text: text("here") },
         "RunCommand" => McBlock::RunCommand {
             command: text("time set day"),
         },
@@ -1082,7 +1295,8 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
             target: Target::EventPlayer,
             effect: "minecraft:speed".to_string(),
             seconds: number(10.0),
-            amplifier: number(0.0),
+            level: number(1.0),
+            amplifier: None,
         },
         "TeleportTarget" => McBlock::TeleportTarget {
             target: Target::EventPlayer,
@@ -1180,9 +1394,7 @@ pub fn prefab(kind: &str) -> Option<McBlock> {
         },
         "EscapeLoop" => McBlock::EscapeLoop,
         "ContinueLoop" => McBlock::ContinueLoop,
-        "Return" => McBlock::Return {
-            value: number(0.0),
-        },
+        "Return" => McBlock::Return { value: number(0.0) },
         "CallBlock" => McBlock::CallBlock {
             block_id: String::new(),
             args: Vec::new(),
@@ -1201,10 +1413,19 @@ pub fn all_types() -> Vec<&'static str> {
 fn piece_json(piece: &Piece) -> serde_json::Value {
     match piece {
         Piece::Label(text) => json!({ "kind": "label", "text": text }),
-        Piece::Slot { field, boolean } => {
+        Piece::Slot {
+            field,
+            boolean,
+            unit,
+        } => {
             // `field` addresses the value for the editor and `key` reads it off
             // the instruction; this vocabulary always names them the same.
-            json!({ "kind": "value", "field": field, "key": field, "bool": boolean })
+            let mut piece =
+                json!({ "kind": "value", "field": field, "key": field, "bool": boolean });
+            if !unit.is_empty() {
+                piece["unit"] = json!(unit);
+            }
+            piece
         }
         Piece::Dropdown {
             key,
@@ -1237,6 +1458,30 @@ fn piece_json(piece: &Piece) -> serde_json::Value {
     }
 }
 
+/// A component as data. `fresh` and `present` need functions on the QML side
+/// where they depend on the document, so `BlockRows.qml` finishes them.
+fn component_json(component: &Component) -> serde_json::Value {
+    let fresh = match component.fresh {
+        Fresh::Number(n) => serde_json::to_value(Value::number(n)).unwrap_or_default(),
+        Fresh::Bool(b) => json!(b),
+        Fresh::Choice(choice) => json!(choice),
+        Fresh::Source(name) => json!({ "source": name }),
+    };
+    let present = match component.present {
+        Present::Set => json!("set"),
+        Present::Is(b) => json!(b),
+        Present::NonEmpty => json!("nonEmpty"),
+    };
+    json!({
+        "key": component.key,
+        "label": component.label,
+        "icon": component.icon,
+        "fresh": fresh,
+        "present": present,
+        "pieces": component.pieces.iter().map(piece_json).collect::<Vec<_>>(),
+    })
+}
+
 /// The row table as `BlockRegistry.registerRows` wants it. `Options::Source`
 /// and `Options::YesNo` come through as data for `BlockRows.qml` to replace
 /// with functions.
@@ -1263,6 +1508,17 @@ pub fn rows_json() -> serde_json::Value {
         }
         if !row.separators.is_empty() {
             entry.insert("separators".to_string(), json!(row.separators));
+        }
+        if !row.components.is_empty() {
+            entry.insert(
+                "components".to_string(),
+                json!(
+                    row.components
+                        .iter()
+                        .map(component_json)
+                        .collect::<Vec<_>>()
+                ),
+            );
         }
         rows.insert(row.kind.to_string(), serde_json::Value::Object(entry));
     }
@@ -1324,8 +1580,8 @@ mod check {
     #[test]
     fn rows_cover_every_type() {
         for row in ROWS {
-            let block = prefab(row.kind)
-                .unwrap_or_else(|| panic!("{} has a row but no prefab", row.kind));
+            let block =
+                prefab(row.kind).unwrap_or_else(|| panic!("{} has a row but no prefab", row.kind));
             let json = serde_json::to_value(&block).unwrap();
             assert_eq!(
                 json["type"], row.kind,
@@ -1389,6 +1645,88 @@ mod check {
                     block.value_slot_mut(field).is_some(),
                     "{}'s row draws a slot for `{field}`, which McBlock has not got",
                     row.kind
+                );
+            }
+        }
+    }
+
+    /// A fresh block with every optional part added, the way the "+" adds
+    /// them: through the instruction's JSON.
+    fn with_every_part(row: &Row) -> McBlock {
+        let mut fields = serde_json::to_value(prefab(row.kind).unwrap()).unwrap();
+        for part in row.components {
+            fields[part.key] = match part.fresh {
+                Fresh::Number(n) => serde_json::to_value(Value::number(n)).unwrap(),
+                Fresh::Bool(b) => json!(b),
+                Fresh::Choice(choice) => json!(choice),
+                Fresh::Source(_) => json!("main"),
+            };
+        }
+        serde_json::from_value(fields)
+            .unwrap_or_else(|e| panic!("{} with every part doesn't load: {e}", row.kind))
+    }
+
+    #[test]
+    fn component_pieces_address_a_real_slot_once_added() {
+        use blockstitch_core::graph::BlockKind;
+        for row in ROWS.iter().filter(|row| !row.components.is_empty()) {
+            let mut block = with_every_part(row);
+            for part in row.components {
+                for piece in part.pieces {
+                    if let Piece::Slot { field, .. } = piece {
+                        assert!(
+                            block.value_slot_mut(field).is_some(),
+                            "{}'s {} part draws `{field}`, which has no slot",
+                            row.kind,
+                            part.label
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_fresh_declaration_has_its_parts_off() {
+        for row in ROWS.iter().filter(|row| !row.components.is_empty()) {
+            let fields = serde_json::to_value(prefab(row.kind).unwrap()).unwrap();
+            for part in row.components {
+                let value = fields.get(part.key);
+                let on = match part.present {
+                    Present::Set => value.is_some_and(|v| !v.is_null()),
+                    Present::Is(b) => value == Some(&json!(b)),
+                    Present::NonEmpty => value
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|v| !v.is_empty()),
+                };
+                // The spawn egg is the one part a fresh entity starts with.
+                let expected = row.kind == "RegisterEntity" && part.key == "spawn_egg";
+                assert_eq!(on, expected, "{}'s {} part", row.kind, part.label);
+            }
+        }
+    }
+
+    #[test]
+    fn taking_a_part_off_reads_back_as_off() {
+        for row in ROWS.iter().filter(|row| !row.components.is_empty()) {
+            let full = serde_json::to_value(with_every_part(row)).unwrap();
+            for part in row.components {
+                let mut fields = full.clone();
+                fields.as_object_mut().unwrap().remove(part.key);
+                let block: McBlock = serde_json::from_value(fields).unwrap();
+                let back = serde_json::to_value(block).unwrap();
+                let value = back.get(part.key);
+                let on = match part.present {
+                    Present::Set => value.is_some_and(|v| !v.is_null()),
+                    Present::Is(b) => value == Some(&json!(b)),
+                    Present::NonEmpty => value
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|v| !v.is_empty()),
+                };
+                assert!(
+                    !on,
+                    "{}'s {} part stays on once removed",
+                    row.kind, part.label
                 );
             }
         }
@@ -1468,7 +1806,10 @@ mod check {
 
     #[test]
     fn every_block_and_reporter_has_a_section() {
-        let named: HashSet<&str> = SECTIONS.iter().flat_map(|s| s.items.iter().copied()).collect();
+        let named: HashSet<&str> = SECTIONS
+            .iter()
+            .flat_map(|s| s.items.iter().copied())
+            .collect();
         let collection: HashSet<&str> = LIST_TYPES
             .iter()
             .chain(DICT_TYPES)
@@ -1483,7 +1824,11 @@ mod check {
             );
         }
         for spec in crate::reporters::REPORTERS {
-            assert!(named.contains(spec.kind), "{} isn't in any palette section", spec.kind);
+            assert!(
+                named.contains(spec.kind),
+                "{} isn't in any palette section",
+                spec.kind
+            );
         }
     }
 
@@ -1491,7 +1836,10 @@ mod check {
     fn self_drawn_types_get_no_row() {
         let rows = rows_json();
         for kind in SELF_DRAWN {
-            assert!(rows.get(*kind).is_none(), "{kind} would replace blockstitch's drawing");
+            assert!(
+                rows.get(*kind).is_none(),
+                "{kind} would replace blockstitch's drawing"
+            );
         }
         assert!(rows.get("RegisterBlock").is_some());
     }

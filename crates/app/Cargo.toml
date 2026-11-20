@@ -16,6 +16,7 @@ blockstitch-core.workspace = true
 blockstitch-qml.workspace = true
 stitchcraft-blocks.workspace = true
 stitchcraft-export.workspace = true
+stitchcraft-devtools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 cxx-qt = "0.10"

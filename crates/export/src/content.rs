@@ -318,11 +318,6 @@ fn mob(names: &Names, base: EntityBase) -> String {
                 s.line("navigation.setCanFloat(true);");
                 s.line("return navigation;");
             });
-            s.blank();
-            s.line("@Override");
-            s.braced("public boolean isFlying()", |s| {
-                s.line("return !this.onGround();");
-            });
         }
         s.blank();
         s.line("@Override");

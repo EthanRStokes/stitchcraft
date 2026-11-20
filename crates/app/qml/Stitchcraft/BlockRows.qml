@@ -11,7 +11,10 @@ import com.blockworked.Blockstitch
 //     `options: {source: "declaredBlocks"}` and turned into the function
 //     BlockRegistry asks for;
 //   * a boolean field, written as `options: "yesno"`: a two-entry dropdown
-//     with an encode/decode pair, since the field is a real JSON boolean.
+//     with an encode/decode pair, since the field is a real JSON boolean;
+//   * an optional part's `fresh` value when it is the first of a document
+//     choice set (`{source: "declaredTabs"}`), and its `present` test
+//     ("set", "nonEmpty", or the boolean the field holds while it's on).
 QtObject {
     id: root
 
@@ -50,12 +53,28 @@ QtObject {
         return out;
     }
 
+    function resolveComponent(component) {
+        const out = Object.assign({}, component);
+        out.pieces = (component.pieces || []).map(resolvePiece);
+        if (component.fresh && component.fresh.source !== undefined) {
+            const name = component.fresh.source;
+            out.fresh = () => (root.choices[name] || [])[0] || "";
+        }
+        const key = component.key;
+        const present = component.present;
+        if (present === "nonEmpty") out.present = i => typeof i[key] === "string" && i[key].length > 0;
+        else if (present === true || present === false) out.present = i => i[key] === present;
+        else delete out.present;
+        return out;
+    }
+
     function register() {
         const rows = root.catalog.rows || {};
         const resolved = {};
         for (const type in rows) {
             const row = Object.assign({}, rows[type]);
             row.head = (row.head || []).map(resolvePiece);
+            if (row.components) row.components = row.components.map(resolveComponent);
             resolved[type] = row;
         }
         BlockRegistry.registerRows(resolved);

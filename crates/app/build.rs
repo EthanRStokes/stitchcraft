@@ -93,9 +93,13 @@ fn main() {
                 "qml/Stitchcraft/BlockRows.qml",
                 "qml/Stitchcraft/IconButton.qml",
                 "qml/Stitchcraft/DiagnosticsBar.qml",
+                "qml/Stitchcraft/DevTools.qml",
+                "qml/Stitchcraft/ConsolePanel.qml",
+                "qml/Stitchcraft/DevDialogs.qml",
                 "qml/Stitchcraft/ModSettingsDialog.qml",
                 "qml/Stitchcraft/MakeBlockDialog.qml",
                 "qml/Stitchcraft/Main.qml",
+                "qml/Stitchcraft/Start.qml",
             ]),
     )
     .qrc("qml/controls.qrc")

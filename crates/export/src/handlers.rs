@@ -31,6 +31,9 @@ struct Handler<'a> {
     method: String,
     /// The header that decides where it is wired up.
     hook: &'a McBlock,
+    /// The header's instruction id, which the debugger lights up when the
+    /// handler starts.
+    header_id: &'a str,
     /// The strand tail - the handler's actual body.
     body: &'a [Instruction<McBlock>],
     mode: ReturnMode,
@@ -69,6 +72,7 @@ fn handlers(project: &ModProject) -> Vec<Handler<'_>> {
         out.push(Handler {
             method,
             hook: &first.kind,
+            header_id: &first.id,
             body,
             mode,
             params,
@@ -104,7 +108,7 @@ fn hook_stem(hook: &McBlock) -> &'static str {
 
 /// `Handlers.java` - every strand's body, plus the per-id dispatch tables the
 /// content classes call into.
-pub fn handlers_java(project: &ModProject, names: &Names) -> String {
+pub fn handlers_java(project: &ModProject, names: &Names, debug: bool) -> String {
     let handlers = handlers(project);
     let mut s = Source::new();
     s.line(format!("package {};", names.script_package()));
@@ -127,10 +131,10 @@ pub fn handlers_java(project: &ModProject, names: &Names) -> String {
     s.braced("public final class Handlers", |s| {
         s.line("private Handlers() {}");
 
-        let mut emitter = Emitter::new(names, project);
+        let mut emitter = Emitter::new(names, project).debugging(debug);
         for handler in &handlers {
             s.blank();
-            write_method(s, &mut emitter, handler, project);
+            write_method(s, &mut emitter, handler, project, debug);
         }
 
         // Delayed bodies queue more delayed bodies, so this drains rather than
@@ -146,7 +150,9 @@ pub fn handlers_java(project: &ModProject, names: &Names) -> String {
                         delayed.method
                     ),
                     |s| {
-                        emitter.body(s, &delayed.body, delayed.mode, &delayed.params);
+                        guarded(s, debug, None, delayed.mode, |s| {
+                            emitter.body(s, &delayed.body, delayed.mode, &delayed.params);
+                        });
                     },
                 );
             }
@@ -163,6 +169,7 @@ fn write_method(
     emitter: &mut Emitter<'_>,
     handler: &Handler<'_>,
     project: &ModProject,
+    debug: bool,
 ) {
     let signature = match handler.mode {
         ReturnMode::Event => format!("public static boolean {}(Ctx ctx, Object[] args)", handler.method),
@@ -171,15 +178,48 @@ fn write_method(
     };
     s.doc(&describe(handler.hook, project));
     s.braced(signature, |s| {
-        emitter.body(s, handler.body, handler.mode, &handler.params);
-        match handler.mode {
-            // Falling off the end of a handler means "nothing cancelled it".
-            ReturnMode::Event => s.line("return true;"),
-            // A reporter-shaped block with no `report` block reports nothing.
-            ReturnMode::Block => s.line("return Double.valueOf(0.0D);"),
-            ReturnMode::Delayed => {}
-        }
+        guarded(s, debug, Some(handler.header_id), handler.mode, |s| {
+            emitter.body(s, handler.body, handler.mode, &handler.params);
+            fall_off_the_end(s, handler.mode);
+        });
     });
+}
+
+/// What a method returns when its body runs out.
+fn fall_off_the_end(s: &mut Source, mode: ReturnMode) {
+    match mode {
+        // Falling off the end of a handler means "nothing cancelled it".
+        ReturnMode::Event => s.line("return true;"),
+        // A reporter-shaped block with no `report` block reports nothing.
+        ReturnMode::Block => s.line("return Double.valueOf(0.0D);"),
+        ReturnMode::Delayed => {}
+    }
+}
+
+/// Writes `body`, and in a debug export wraps it so the debugger sees the
+/// strand start and any exception it throws. A failing handler is reported
+/// against the block it was on and then behaves as if it had finished, so one
+/// broken stack does not take the game down while you are fixing it.
+fn guarded(
+    s: &mut Source,
+    debug: bool,
+    header_id: Option<&str>,
+    mode: ReturnMode,
+    body: impl FnOnce(&mut Source),
+) {
+    if !debug {
+        body(s);
+        return;
+    }
+    if let Some(id) = header_id {
+        s.line(format!("Dbg.at({});", quote(id)));
+    }
+    s.open("try {");
+    body(s);
+    s.pivot("} catch (RuntimeException failure) {");
+    s.line("Dbg.fail(failure);");
+    fall_off_the_end(s, mode);
+    s.close("}");
 }
 
 /// The doc comment a handler gets, so the generated file reads as a map back to

@@ -101,11 +101,6 @@ pub fn main_class(project: &ModProject, names: &Names) -> String {
             s.line("ModItems.REGISTRY.register();");
             s.line("ModEntities.REGISTRY.register();");
             s.line("ModTabs.REGISTRY.register();");
-            if has_entities {
-                s.blank();
-                s.comment("Without these a declared mob throws the first time it spawns.");
-                s.line("ModEntities.registerAttributes();");
-            }
             s.blank();
             s.line("declareState();");
             s.line("Hooks.register();");
@@ -300,6 +295,7 @@ pub fn commands_java(project: &ModProject, names: &Names) -> String {
 pub fn fabric_files(project: &ModProject, names: &Names) -> Vec<(String, String)> {
     let main = &names.main_class;
     let has_commands = !commands(project).is_empty();
+    let has_entities = !crate::content::declared_bases(project).is_empty();
 
     let mut s = Source::new();
     s.line(format!("package {}.fabric;", names.package));
@@ -318,11 +314,19 @@ pub fn fabric_files(project: &ModProject, names: &Names) -> Vec<(String, String)
         s.line("import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;");
         s.line(format!("import {}.ModCommands;", names.script_package()));
     }
+    if has_entities {
+        s.line("import net.frozenblock.lib.entity.api.attribute.DefaultAttributeRegistry;");
+        s.line(format!("import {}.registry.ModEntities;", names.package));
+    }
     s.blank();
     s.braced(format!("public final class {main}Fabric implements ModInitializer"), |s| {
         s.line("@Override");
         s.braced("public void onInitialize()", |s| {
             s.line(format!("{main}.init();"));
+            if has_entities {
+                s.comment("Without these a declared mob throws the first time it spawns.");
+                s.line("ModEntities.registerAttributes(DefaultAttributeRegistry::register);");
+            }
             if has_commands {
                 s.open("CommandRegistrationCallback.EVENT.register((dispatcher, registry, environment) -> {");
                 s.line("ModCommands.register(dispatcher);");
@@ -396,6 +400,7 @@ pub fn fabric_files(project: &ModProject, names: &Names) -> Vec<(String, String)
 pub fn neoforge_files(project: &ModProject, names: &Names) -> Vec<(String, String)> {
     let main = &names.main_class;
     let has_commands = !commands(project).is_empty();
+    let has_entities = !crate::content::declared_bases(project).is_empty();
 
     let mut s = Source::new();
     s.line(format!("package {}.neoforge;", names.package));
@@ -412,6 +417,13 @@ pub fn neoforge_files(project: &ModProject, names: &Names) -> Vec<(String, Strin
         "import net.neoforged.fml.common.Mod;",
         format!("import {}.{main};", names.package).as_str(),
     ]);
+    if has_entities {
+        s.lines([
+            "import net.neoforged.bus.api.IEventBus;",
+            "import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;",
+        ]);
+        s.line(format!("import {}.registry.ModEntities;", names.package));
+    }
     if has_commands {
         s.lines([
             "import net.neoforged.bus.api.SubscribeEvent;",
@@ -423,8 +435,20 @@ pub fn neoforge_files(project: &ModProject, names: &Names) -> Vec<(String, Strin
     s.blank();
     s.line(format!("@Mod({main}.MOD_ID)"));
     s.braced(format!("public final class {main}NeoForge"), |s| {
-        s.braced(format!("public {main}NeoForge()"), |s| {
+        let constructor = if has_entities {
+            format!("public {main}NeoForge(IEventBus modBus)")
+        } else {
+            format!("public {main}NeoForge()")
+        };
+        s.braced(constructor, |s| {
             s.line(format!("{main}.init();"));
+            if has_entities {
+                s.comment(
+                    "Entity types are not bound until registration has run, so \
+                     their attributes go through NeoForge's own event.",
+                );
+                s.line("modBus.addListener(EntityAttributeCreationEvent.class, event -> ModEntities.registerAttributes(event::put));");
+            }
             s.comment(
                 "The client half runs from a dist-specific listener rather than \
                  here, so a dedicated server never touches client classes.",
@@ -464,7 +488,7 @@ pub fn neoforge_files(project: &ModProject, names: &Names) -> Vec<(String, Strin
     ]);
     c.blank();
     c.line(format!(
-        "@EventBusSubscriber(modid = {main}.MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)"
+        "@EventBusSubscriber(modid = {main}.MOD_ID, value = Dist.CLIENT)"
     ));
     c.braced(format!("public final class {main}NeoForgeClient"), |c| {
         c.line(format!("private {main}NeoForgeClient() {{}}"));

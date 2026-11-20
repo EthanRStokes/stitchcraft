@@ -9,12 +9,25 @@
 //! jar.
 //!
 //! Plugin and dependency versions live in `gradle.properties` so they can be
-//! bumped without touching a build script. The generated `README.md` says which
-//! ones to confirm before the first build, because Minecraft's ecosystem moves
-//! faster than any generator can track.
+//! bumped without touching a build script. The build scripts follow Fabric's
+//! and NeoForge's own templates for the targeted game version (Minecraft 26.x
+//! ships unobfuscated, so there are no mappings and no remapping).
+//!
+//! The export carries a Gradle wrapper, so `./gradlew build` works with
+//! nothing but a JDK installed, and the editor's Run and Build buttons use the
+//! same wrapper.
+//!
+//! Each loader's runs read one optional Gradle property, `stitchcraftDebug`.
+//! The editor sets it to the address of its debugger when it starts a debug
+//! run; the generated `Dbg` class connects there. Without it the runs are
+//! ordinary dev runs and `Dbg` does nothing.
 
 use crate::naming::Names;
+use std::collections::BTreeMap;
 use stitchcraft_blocks::ModProject;
+
+/// The Gradle version the wrapper downloads.
+pub const GRADLE_VERSION: &str = "9.8.2";
 
 /// Every build file. Only the loaders the project asked for get a subproject.
 pub fn files(project: &ModProject, names: &Names) -> Vec<(String, String)> {
@@ -26,6 +39,21 @@ pub fn files(project: &ModProject, names: &Names) -> Vec<(String, String)> {
             properties(project, names),
         ),
         (".gitignore".to_string(), gitignore()),
+        ("gradlew".to_string(), include_str!("../../../res/gradle-wrapper/gradlew").to_string()),
+        (
+            "gradlew.bat".to_string(),
+            include_str!("../../../res/gradle-wrapper/gradlew.bat").to_string(),
+        ),
+        (
+            "gradle/wrapper/gradle-wrapper.properties".to_string(),
+            include_str!("../../../res/gradle-wrapper/gradle-wrapper.properties").to_string(),
+        ),
+        // Loom needs Gradle itself to run on Java 25. This lets the wrapper
+        // start on any Java 17 or newer and fetch a 25 for its daemon.
+        (
+            "gradle/gradle-daemon-jvm.properties".to_string(),
+            include_str!("../../../res/gradle-wrapper/gradle-daemon-jvm.properties").to_string(),
+        ),
     ];
     if project.loaders.fabric {
         out.push(("fabric/build.gradle.kts".to_string(), fabric_build()));
@@ -36,21 +64,46 @@ pub fn files(project: &ModProject, names: &Names) -> Vec<(String, String)> {
     out
 }
 
+/// The wrapper's jar, the one binary file in an export.
+pub fn binaries() -> BTreeMap<String, &'static [u8]> {
+    BTreeMap::from([(
+        "gradle/wrapper/gradle-wrapper.jar".to_string(),
+        &include_bytes!("../../../res/gradle-wrapper/gradle-wrapper.jar")[..],
+    )])
+}
+
+/// Files written with the executable bit on Unix.
+pub fn is_executable(path: &str) -> bool {
+    path == "gradlew"
+}
+
 fn settings(project: &ModProject) -> String {
     let mut out = String::from(
-        "pluginManagement {\n    \
-         repositories {\n        \
-         maven(\"https://maven.fabricmc.net/\") { name = \"Fabric\" }\n        \
-         maven(\"https://maven.neoforged.net/releases\") { name = \"NeoForged\" }\n        \
-         gradlePluginPortal()\n    \
-         }\n\
-         }\n\n",
+        r#"pluginManagement {
+    repositories {
+        maven("https://maven.fabricmc.net/") { name = "Fabric" }
+        maven("https://maven.neoforged.net/releases") { name = "NeoForged" }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+    // Plugin versions come from gradle.properties, so the loader builds can
+    // apply them by id alone.
+    val loomVersion: String by settings
+    val modDevVersion: String by settings
+    plugins {
+        id("net.fabricmc.fabric-loom") version loomVersion
+        id("net.neoforged.moddev") version modDevVersion
+    }
+}
+
+plugins {
+    // Downloads the JDK the build asks for when it is not installed.
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
+"#,
     );
-    out.push_str("plugins {\n    id(\"org.gradle.toolchains.foojay-resolver-convention\") version \"1.0.0\"\n}\n\n");
-    out.push_str(&format!(
-        "rootProject.name = \"{}\"\n\n",
-        project.mod_id
-    ));
+    out.push_str(&format!("rootProject.name = \"{}\"\n\n", project.mod_id));
     out.push_str(
         "// `common/` is a source directory shared by both loaders rather than a\n\
          // subproject of its own - see each loader's build script.\n",
@@ -65,48 +118,46 @@ fn settings(project: &ModProject) -> String {
 }
 
 fn root_build(project: &ModProject) -> String {
-    format!(
-        "// Settings every subproject shares. The loader-specific plugins are\n\
-         // applied in the subprojects themselves, because Loom and ModDevGradle\n\
-         // cannot both be on one project.\n\
-         plugins {{\n    \
-         id(\"java\")\n\
-         }}\n\n\
-         val modVersion: String by project\n\n\
-         allprojects {{\n    \
-         apply(plugin = \"java\")\n\n    \
-         group = \"{}\"\n    \
-         version = modVersion\n\n    \
-         repositories {{\n        \
-         mavenCentral()\n        \
-         maven(\"https://maven.frozenblock.net/release\") {{ name = \"FrozenBlock\" }}\n        \
-         maven(\"https://maven.frozenblock.net/snapshot\") {{ name = \"FrozenBlock Snapshot\" }}\n        \
-         // FrozenLib is published to Modrinth's maven as well, which is the\n        \
-         // coordinate the loader builds below use by default.\n        \
-         exclusiveContent {{\n            \
-         forRepository {{ maven(\"https://api.modrinth.com/maven\") {{ name = \"Modrinth\" }} }}\n            \
-         filter {{ includeGroup(\"maven.modrinth\") }}\n        \
-         }}\n    \
-         }}\n\n    \
-         java {{\n        \
-         val javaVersion = JavaVersion.toVersion((project.property(\"javaVersion\") as String).toInt())\n        \
-         toolchain {{ languageVersion.set(JavaLanguageVersion.of(javaVersion.majorVersion)) }}\n        \
-         sourceCompatibility = javaVersion\n        \
-         targetCompatibility = javaVersion\n        \
-         withSourcesJar()\n    \
-         }}\n\n    \
-         tasks.withType<JavaCompile>().configureEach {{\n        \
-         options.encoding = \"UTF-8\"\n        \
-         options.release.set((project.property(\"javaVersion\") as String).toInt())\n    \
-         }}\n\n    \
-         tasks.withType<ProcessResources>().configureEach {{\n        \
-         // Both loaders' metadata files are written out complete, so nothing\n        \
-         // needs expanding here - this only keeps the task reproducible.\n        \
-         duplicatesStrategy = DuplicatesStrategy.INCLUDE\n    \
-         }}\n\
-         }}\n",
-        project.package
-    )
+    r#"// Settings every subproject shares. The loader-specific plugins are
+// applied in the subprojects themselves, because Loom and ModDevGradle
+// cannot both be on one project.
+val modVersion: String by project
+val javaVersion: String by project
+
+subprojects {
+    apply(plugin = "java")
+
+    group = "@GROUP@"
+    version = modVersion
+
+    repositories {
+        // FrozenLib is published to Modrinth's maven, which is the coordinate
+        // the loader builds use.
+        exclusiveContent {
+            forRepository { maven("https://api.modrinth.com/maven") { name = "Modrinth" } }
+            filter { includeGroup("maven.modrinth") }
+        }
+        // Fabric's own artifacts, asked for here first rather than after
+        // Maven Central has been asked and said no.
+        maven("https://maven.fabricmc.net/") {
+            name = "Fabric"
+            content { includeGroupByRegex("net\\.fabricmc.*") }
+        }
+        mavenCentral()
+    }
+
+    extensions.configure<JavaPluginExtension> {
+        toolchain { languageVersion.set(JavaLanguageVersion.of(javaVersion.toInt())) }
+        withSourcesJar()
+    }
+
+    tasks.withType<JavaCompile>().configureEach {
+        options.encoding = "UTF-8"
+        options.release.set(javaVersion.toInt())
+    }
+}
+"#
+    .replace("@GROUP@", &project.package)
 }
 
 fn properties(project: &ModProject, names: &Names) -> String {
@@ -126,11 +177,13 @@ fn properties(project: &ModProject, names: &Names) -> String {
          fabricApiVersion={}\n\
          neoforgeVersion={}\n\n\
          # FrozenLib, which the generated registry and event code is built on.\n\
+         # The Modrinth file version without its loader; each build adds\n\
+         # -fabric or -neoforge.\n\
          frozenlibVersion={}\n\n\
          # Build plugins. These track the game version rather than the mod, and\n\
          # are the first thing to check if the build fails before compiling.\n\
-         loomVersion=1.12-SNAPSHOT\n\
-         modDevVersion=2.0.+\n",
+         loomVersion=1.19-SNAPSHOT\n\
+         modDevVersion=2.0.148\n",
         project.mod_id,
         project.name,
         project.version,
@@ -146,65 +199,98 @@ fn properties(project: &ModProject, names: &Names) -> String {
 
 fn fabric_build() -> String {
     String::from(
-        "// The Fabric build. `common/` is pulled in as extra source rather than a\n\
-         // project dependency, so it compiles against Fabric's Minecraft directly.\n\
-         plugins {\n    \
-         id(\"fabric-loom\") version providers.gradleProperty(\"loomVersion\").get()\n\
-         }\n\n\
-         val minecraftVersion: String by project\n\
-         val fabricLoaderVersion: String by project\n\
-         val fabricApiVersion: String by project\n\
-         val frozenlibVersion: String by project\n\
-         val modId: String by project\n\n\
-         base { archivesName.set(\"$modId-fabric\") }\n\n\
-         sourceSets {\n    \
-         main {\n        \
-         java.srcDir(rootProject.file(\"common/src/main/java\"))\n        \
-         resources.srcDir(rootProject.file(\"common/src/main/resources\"))\n    \
-         }\n\
-         }\n\n\
-         dependencies {\n    \
-         minecraft(\"com.mojang:minecraft:$minecraftVersion\")\n    \
-         mappings(loom.officialMojangMappings())\n    \
-         modImplementation(\"net.fabricmc:fabric-loader:$fabricLoaderVersion\")\n    \
-         modImplementation(\"net.fabricmc.fabric-api:fabric-api:$fabricApiVersion\")\n\n    \
-         // FrozenLib supplies the deferred registries and the cross-platform\n    \
-         // events the generated code is written against.\n    \
-         modImplementation(\"maven.modrinth:frozenlib:$frozenlibVersion\")\n\
-         }\n",
+        r#"// The Fabric build. `common/` is pulled in as extra source rather than a
+// project dependency, so it compiles against Fabric's Minecraft directly.
+plugins {
+    id("net.fabricmc.fabric-loom")
+}
+
+val minecraftVersion: String by project
+val fabricLoaderVersion: String by project
+val fabricApiVersion: String by project
+val frozenlibVersion: String by project
+val modId: String by project
+
+base { archivesName.set("$modId-fabric") }
+
+sourceSets {
+    main {
+        java.srcDir(rootProject.file("common/src/main/java"))
+        resources.srcDir(rootProject.file("common/src/main/resources"))
+    }
+}
+
+// Set by Stitchcraft's Debug button: where the editor's debugger listens.
+val stitchcraftDebug: String? = providers.gradleProperty("stitchcraftDebug").orNull
+
+loom {
+    runs {
+        configureEach {
+            if (stitchcraftDebug != null) property("stitchcraft.debug", stitchcraftDebug)
+        }
+    }
+}
+
+dependencies {
+    minecraft("com.mojang:minecraft:$minecraftVersion")
+    implementation("net.fabricmc:fabric-loader:$fabricLoaderVersion")
+    implementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
+
+    // FrozenLib supplies the deferred registries and the cross-platform
+    // events the generated code is written against.
+    implementation("maven.modrinth:frozenlib:$frozenlibVersion-fabric")
+}
+"#,
     )
 }
 
 fn neoforge_build() -> String {
     String::from(
-        "// The NeoForge build, using NeoForge's own ModDevGradle. As on the Fabric\n\
-         // side, `common/` is extra source rather than a project dependency.\n\
-         plugins {\n    \
-         id(\"net.neoforged.moddev\") version providers.gradleProperty(\"modDevVersion\").get()\n\
-         }\n\n\
-         val neoforgeVersion: String by project\n\
-         val frozenlibVersion: String by project\n\
-         val modId: String by project\n\n\
-         base { archivesName.set(\"$modId-neoforge\") }\n\n\
-         neoForge {\n    \
-         version = neoforgeVersion\n\n    \
-         runs {\n        \
-         create(\"client\") { client() }\n        \
-         create(\"server\") { server() }\n    \
-         }\n\n    \
-         mods {\n        \
-         create(modId) { sourceSet(sourceSets.main.get()) }\n    \
-         }\n\
-         }\n\n\
-         sourceSets {\n    \
-         main {\n        \
-         java.srcDir(rootProject.file(\"common/src/main/java\"))\n        \
-         resources.srcDir(rootProject.file(\"common/src/main/resources\"))\n    \
-         }\n\
-         }\n\n\
-         dependencies {\n    \
-         implementation(\"maven.modrinth:frozenlib:$frozenlibVersion\")\n\
-         }\n",
+        r#"// The NeoForge build, using NeoForge's own ModDevGradle. As on the Fabric
+// side, `common/` is extra source rather than a project dependency.
+plugins {
+    id("net.neoforged.moddev")
+}
+
+val neoforgeVersion: String by project
+val frozenlibVersion: String by project
+val modId: String by project
+
+base { archivesName.set("$modId-neoforge") }
+
+// Set by Stitchcraft's Debug button: where the editor's debugger listens.
+val stitchcraftDebug: String? = providers.gradleProperty("stitchcraftDebug").orNull
+
+neoForge {
+    version = neoforgeVersion
+
+    runs {
+        create("client") { client() }
+        create("server") {
+            server()
+            programArgument("--nogui")
+        }
+        configureEach {
+            if (stitchcraftDebug != null) systemProperty("stitchcraft.debug", stitchcraftDebug)
+        }
+    }
+
+    mods {
+        create(modId) { sourceSet(sourceSets.main.get()) }
+    }
+}
+
+sourceSets {
+    main {
+        java.srcDir(rootProject.file("common/src/main/java"))
+        resources.srcDir(rootProject.file("common/src/main/resources"))
+    }
+}
+
+dependencies {
+    implementation("maven.modrinth:frozenlib:$frozenlibVersion-neoforge")
+}
+"#,
     )
 }
 
@@ -261,8 +347,10 @@ pub fn readme(project: &ModProject, names: &Names, missing_art: &[String]) -> St
          configured if you would rather use `net.frozenblock` coordinates.\n\
          - `minecraftVersion`, `fabricApiVersion`, `neoforgeVersion` - set from \
          the canvas's build targets ({mc}).\n\n\
-         There is no Gradle wrapper in the export. Run `gradle wrapper` once, or \
-         build with a Gradle you already have.\n\n",
+         Build with `./gradlew build` (`gradlew.bat build` on Windows); the \
+         jars land in `fabric/build/libs/` and `neoforge/build/libs/`. \
+         `./gradlew :fabric:runClient` or `:neoforge:runServer` start a \
+         development game.\n\n",
         project.name,
         pkg = names.package_dir(),
         mc = project.targets.minecraft_version,

@@ -33,6 +33,19 @@ fn constant(value: &Value, field: &str, id: &str, warnings: &mut Vec<String>, fa
     }
 }
 
+/// [`constant`] for an optional part, which is `fallback` while it's off.
+fn optional(
+    value: &Option<Value>,
+    field: &str,
+    id: &str,
+    warnings: &mut Vec<String>,
+    fallback: f64,
+) -> f64 {
+    value
+        .as_ref()
+        .map_or(fallback, |value| constant(value, field, id, warnings, fallback))
+}
+
 /// The map colour and sound type a material preset stands for.
 fn material_properties(material: MaterialPreset) -> (&'static str, &'static str) {
     match material {
@@ -180,8 +193,10 @@ pub fn blocks_java(project: &ModProject, names: &Names, warnings: &mut Vec<Strin
             let id = block_id.trim();
             let (map_color, sound) = material_properties(*material);
             let hardness = constant(hardness, "hardness", id, warnings, 1.5);
-            let resistance = constant(resistance, "blast resistance", id, warnings, 6.0);
-            let light = constant(light, "light level", id, warnings, 0.0).clamp(0.0, 15.0);
+            // Like vanilla's one-argument `strength`, resistance follows hardness
+            // unless the block says otherwise.
+            let resistance = optional(resistance, "blast resistance", id, warnings, hardness);
+            let light = optional(light, "light level", id, warnings, 0.0).clamp(0.0, 15.0);
             s.doc(&format!("`{}:{id}`.", project.mod_id));
             s.open(format!(
                 "public static final DeferredBlock<ScriptedBlock> {} = REGISTRY.registerBlock(",
@@ -267,7 +282,7 @@ pub fn items_java(project: &ModProject, names: &Names, warnings: &mut Vec<String
                 continue;
             };
             let id = item_id.trim();
-            let stack = constant(max_stack, "stack size", id, warnings, 64.0).clamp(1.0, 99.0);
+            let stack = optional(max_stack, "stack size", id, warnings, 64.0).clamp(1.0, 99.0);
             s.doc(&format!("`{}:{id}`.", project.mod_id));
             s.open(format!(
                 "public static final DeferredItem<ScriptedItem> {} = REGISTRY.registerItem(",
@@ -278,7 +293,7 @@ pub fn items_java(project: &ModProject, names: &Names, warnings: &mut Vec<String
             s.line(format!(
                 "properties -> properties.stacksTo({}).rarity({})",
                 int(stack),
-                rarity_constant(*rarity)
+                rarity_constant(rarity.unwrap_or_default())
             ));
             s.close(");");
             s.line("");
@@ -302,7 +317,7 @@ pub fn items_java(project: &ModProject, names: &Names, warnings: &mut Vec<String
                 naming::constant_name(&format!("{id}_item"))
             ));
             s.line(format!("{},", quote(id)));
-            s.line("BlockItem::new,");
+            s.line("(properties, block) -> new BlockItem(block, properties),");
             s.line(format!("ModBlocks.{}", naming::constant_name(id)));
             s.close(");");
             s.line("");
@@ -321,16 +336,20 @@ pub fn entities_java(project: &ModProject, names: &Names, warnings: &mut Vec<Str
         names,
         "Every entity the canvas declares.\n\nAn entity type is only half the \
          job: without default attributes the game throws the first time one \
-         spawns, so `registerAttributes` is called from the common mod init \
-         through FrozenLib's cross-platform `DefaultAttributeRegistry`.",
+         spawns. `registerAttributes` hands them to whatever the loader takes \
+         them through: on Fabric right after init, when the types already \
+         exist; on NeoForge from its attribute event, because its deferred \
+         types are not bound yet while the mod is being constructed.",
         &[
-            "import net.frozenblock.lib.entity.api.attribute.DefaultAttributeRegistry;",
+            "import java.util.function.BiConsumer;",
             "import net.frozenblock.lib.platform.api.registry.DeferredEntityType;",
             "import net.frozenblock.lib.platform.api.registry.DeferredRegister;",
             "import net.minecraft.core.registries.Registries;",
             "import net.minecraft.resources.ResourceKey;",
             "import net.minecraft.world.entity.EntityType;",
+            "import net.minecraft.world.entity.LivingEntity;",
             "import net.minecraft.world.entity.MobCategory;",
+            "import net.minecraft.world.entity.ai.attributes.AttributeSupplier;",
         ],
     );
     let bases: Vec<&'static str> = declared
@@ -390,11 +409,12 @@ pub fn entities_java(project: &ModProject, names: &Names, warnings: &mut Vec<Str
             s.line("");
         }
         s.doc(
-            "Called from the common mod init, once the entity types exist. \
-             FrozenLib routes this to Fabric's attribute registry or NeoForge's \
-             attribute event as needed.",
+            "Hands each entity type's default attributes to `sink`. Called by \
+             the loader entrypoints once the types are bound.",
         );
-        s.braced("public static void registerAttributes()", |s| {
+        s.braced(
+            "public static void registerAttributes(BiConsumer<EntityType<? extends LivingEntity>, AttributeSupplier> sink)",
+            |s| {
             if declared.entities.is_empty() {
                 s.comment("No entities declared.");
                 return;
@@ -413,18 +433,19 @@ pub fn entities_java(project: &ModProject, names: &Names, warnings: &mut Vec<Str
                 };
                 let id = entity_id.trim();
                 let class = mob_class(*base);
-                let health = constant(max_health, "health", id, warnings, 10.0).max(1.0);
-                let speed = constant(movement_speed, "speed", id, warnings, 0.25).max(0.0);
-                let damage = constant(attack_damage, "attack damage", id, warnings, 2.0).max(0.0);
+                let health = optional(max_health, "health", id, warnings, 10.0).max(1.0);
+                let speed = optional(movement_speed, "speed", id, warnings, 0.25).max(0.0);
+                let damage = optional(attack_damage, "attack damage", id, warnings, 2.0).max(0.0);
                 s.line(format!(
-                    "DefaultAttributeRegistry.register({}.get(), {class}.attributes({}, {}, {}));",
+                    "sink.accept({}.get(), {class}.attributes({}, {}, {}).build());",
                     naming::constant_name(id),
                     double(health),
                     double(speed),
                     double(damage)
                 ));
             }
-        });
+            },
+        );
         s.line("");
         s.line("private ModEntities() {}");
     });
@@ -516,7 +537,7 @@ pub fn tabs_java(project: &ModProject, names: &Names) -> String {
                 naming::constant_name(id)
             ));
             s.line(format!("{},", quote(id)));
-            s.open("() -> CreativeModeTab.builder()");
+            s.open("() -> CreativeModeTab.builder(CreativeModeTab.Row.TOP, 0)");
             s.line(format!(
                 ".title(Component.translatable(\"itemGroup.{}.{id}\"))",
                 project.mod_id
