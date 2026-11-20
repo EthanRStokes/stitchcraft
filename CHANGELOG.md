@@ -17,6 +17,8 @@ release `0.1.0` uses the `## [0.1.0]` section below.
 - New Players category for messages and what you do to players and mobs.
 - Coordinates and mob sizes are captioned (x, y, z, width, height).
 - Effect levels count from 1, as in game; older projects are converted.
+- A frameless window like Blockwork's: the toolbar is the title bar, with its
+  own minimize, maximize and close buttons, rounded corners and a shadow on Linux.
 - Moved to the shared blockstitch editor and the Blockworked look.
 
 ## [0.1.0] - 2026-09-29

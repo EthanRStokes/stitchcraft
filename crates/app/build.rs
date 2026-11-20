@@ -9,6 +9,9 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 use std::path::PathBuf;
 
+#[path = "build_support/qwindowkit.rs"]
+mod qwindowkit;
+
 /// Puts the app icon and version information into `stitchcraft.exe`.
 ///
 /// Windows reads an app's icon out of the executable itself - Explorer, the
@@ -80,8 +83,29 @@ END
         .expect("compile the Windows resources");
 }
 
+/// QtCore/QtGui private headers, for the Wayland frame-margin hook in
+/// `src/window.cpp`. Empty off Linux, or where Qt has none installed.
+fn qt_private_includes() -> Vec<PathBuf> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+        return Vec::new();
+    }
+    let Ok(qt) = qt_build_utils::QtBuild::new(vec!["Core".into(), "Gui".into()]) else {
+        return Vec::new();
+    };
+    let version = qt.version().to_string();
+    qt.include_paths()
+        .into_iter()
+        .filter_map(|dir| {
+            let name = dir.file_name()?.to_str()?;
+            (name == "QtCore" || name == "QtGui").then(|| dir.join(&version))
+        })
+        .filter(|dir| dir.exists())
+        .collect()
+}
+
 fn main() {
     embed_windows_resources();
+    let qwindowkit = qwindowkit::build();
 
     let builder = CxxQtBuilder::new_qml_module(
         QmlModule::new("com.blockworked.Stitchcraft")
@@ -93,6 +117,8 @@ fn main() {
                 "qml/Stitchcraft/BlockRows.qml",
                 "qml/Stitchcraft/IconButton.qml",
                 "qml/Stitchcraft/DiagnosticsBar.qml",
+                "qml/Stitchcraft/TitleBarDrag.qml",
+                "qml/Stitchcraft/WindowControls.qml",
                 "qml/Stitchcraft/DevTools.qml",
                 "qml/Stitchcraft/ConsolePanel.qml",
                 "qml/Stitchcraft/DevDialogs.qml",
@@ -105,17 +131,28 @@ fn main() {
     .qrc("qml/controls.qrc")
     .file("src/bridge.rs")
     .file("src/fonts.rs")
+    .file("src/window.rs")
     .qt_module("Quick")
     .qt_module("QuickControls2");
-    println!("cargo:rerun-if-changed=src/fonts.cpp");
-    println!("cargo:rerun-if-changed=src/fonts.h");
-    // SAFETY: only adds this crate's own C++ file and include directory.
+    for file in ["fonts.cpp", "fonts.h", "window.cpp", "window.h"] {
+        println!("cargo:rerun-if-changed=src/{file}");
+    }
+    let private_includes = qt_private_includes();
+    // SAFETY: only adds this crate's own C++ files and include directories.
     unsafe {
         builder
             .cc_builder(|cc| {
                 cc.include("src");
+                cc.include(qwindowkit.join("include/QWindowKit"));
+                cc.define("QWK_QUICK_STATIC", None);
+                cc.define("QWK_CORE_STATIC", None);
                 cc.file("src/fonts.cpp");
+                cc.file("src/window.cpp");
+                for dir in &private_includes {
+                    cc.include(dir);
+                }
             })
             .build();
     }
+    qwindowkit::link(&qwindowkit);
 }

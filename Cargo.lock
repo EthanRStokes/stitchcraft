@@ -1791,11 +1791,13 @@ version = "0.1.0"
 dependencies = [
  "blockstitch-core",
  "blockstitch-qml",
+ "cmake",
  "cxx",
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
  "embed-resource",
+ "qt-build-utils",
  "serde",
  "serde_json",
  "stitchcraft-blocks",

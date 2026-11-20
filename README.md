@@ -103,7 +103,14 @@ to download Eclipse Temurin 25 for its own use. Gradle itself fetches the JDK
 
 ## Building
 
-Needs Rust 1.85+, Qt 6.10+ and a C++ toolchain (cxx-qt 0.10 requires Qt 6.10).
+Needs Rust 1.85+, Qt 6.10+ (a full SDK, with its CMake files and private
+headers), CMake 3.19+ and a C++ toolchain (cxx-qt 0.10 requires Qt 6.10).
+
+The window is frameless, the way Blockwork's is: [QWindowKit](https://github.com/stdware/qwindowkit)
+(Apache-2.0) moves, snaps and maximizes it, and the toolbar doubles as the title
+bar. The first build downloads QWindowKit's source; offline, point
+`STITCHCRAFT_QWINDOWKIT_SOURCE_DIR` at a checkout of the pinned commit
+(`crates/app/native/CMakeLists.txt`).
 
 Cargo downloads blockstitch (the `qml` branch of
 [Blockworked/blockstitch](https://github.com/Blockworked/blockstitch)) by itself on

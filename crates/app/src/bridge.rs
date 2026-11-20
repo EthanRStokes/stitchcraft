@@ -61,6 +61,12 @@ pub mod qobject {
         #[qinvokable]
         fn dev(self: Pin<&mut Backend>, command: &QString, args: &QString) -> QString;
 
+        /// Marks `margin` px around the frameless window as shadow, so the
+        /// compositor moves and clamps the visible frame (Wayland).
+        #[qinvokable]
+        #[cxx_name = "setWindowFrameMargin"]
+        fn set_window_frame_margin(self: &Backend, margin: i32);
+
         #[qinvokable]
         #[cxx_name = "newProject"]
         fn new_project(self: Pin<&mut Backend>);
@@ -386,6 +392,10 @@ impl qobject::Backend {
     /// `{"ok": false, "error": "..."}`; `start` may instead answer
     /// `{"ok": false, "refusal": {"reason": ...}}` when the user has to do
     /// something first (get Java, accept the EULA).
+    fn set_window_frame_margin(&self, margin: i32) {
+        crate::window::set_frame_margin(margin);
+    }
+
     fn dev(mut self: Pin<&mut Self>, command: &QString, args: &QString) -> QString {
         let args: Json = serde_json::from_str(&text(args)).unwrap_or(Json::Null);
         let answer = self.as_mut().dev_command(&text(command), &args);

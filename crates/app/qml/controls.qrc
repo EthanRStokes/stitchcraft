@@ -17,5 +17,14 @@
   </qresource>
   <qresource prefix="/icons">
     <file alias="stitchcraft.png">../../../res/icons/stitchcraft.png</file>
+    <file alias="window-shadow.png">../../../res/icons/window-shadow.png</file>
+  </qresource>
+  <!-- Loaded by URL rather than through the module: it imports QWindowKit,
+       whose types are registered at run time (src/window.cpp). -->
+  <qresource prefix="/window">
+    <file alias="WindowChrome.qml">window/WindowChrome.qml</file>
+  </qresource>
+  <qresource prefix="/licenses">
+    <file alias="QWindowKit-LICENSE">../../../res/licenses/QWindowKit-LICENSE</file>
   </qresource>
 </RCC>

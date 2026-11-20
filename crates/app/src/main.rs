@@ -22,7 +22,9 @@
 
 mod bridge;
 mod fonts;
+mod window;
 
+use cxx_qt::casting::Upcast;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
 fn main() {
@@ -45,6 +47,10 @@ fn main() {
     // resources have to be initialized before anything imports them.
     blockstitch_qml::init();
     cxx_qt::init_qml_module!("com.blockworked.Stitchcraft");
+
+    if let Some(engine) = engine.as_mut() {
+        window::prepare(engine.upcast_pin());
+    }
 
     if !engine.is_null() {
         // The resource alias keeps the path the file has in the crate, so the
